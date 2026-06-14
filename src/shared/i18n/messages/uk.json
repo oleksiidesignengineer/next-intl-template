@@ -1,0 +1,100 @@
+{
+  "common": {
+    "loading": "Завантаження…",
+    "back": "Назад",
+    "languageSwitcher": "Мова"
+  },
+  "header": {
+    "navLabel": "Основна навігація",
+    "home": "Головна",
+    "about": "Про шаблон",
+    "blog": "Блог",
+    "contact": "Контакти",
+    "plurals": "Плюрали",
+    "formats": "Формати"
+  },
+  "home": {
+    "title": "Шаблон next-intl",
+    "description": "Мультимовність для Next.js 16: App Router, ICU-повідомлення, локалізовані URL та типобезпечні ключі.",
+    "links": {
+      "about": "Про шаблон",
+      "plurals": "Демо плюралів",
+      "formats": "Демо форматів"
+    },
+    "seo": {
+      "title": "Шаблон next-intl",
+      "description": "Робочий приклад next-intl з App Router, ICU, форматами та локалізованими URL."
+    }
+  },
+  "about": {
+    "title": "Про шаблон",
+    "body": "Ця сторінка демонструє локалізовані pathnames (поглянь на URL: /about, /ru/o-nas, /uk/pro-nas) та серверні переклади через getTranslations.",
+    "seo": {
+      "title": "Про шаблон",
+      "description": "Інформація про шаблон next-intl."
+    }
+  },
+  "plurals": {
+    "title": "Плюрали та інтерполяція",
+    "intro": "Зміни число й ім'я нижче. Перемкни мову в шапці, щоб побачити різницю у формах множини.",
+    "items": "{count, plural, =0 {немає елементів} one {# елемент} few {# елементи} many {# елементів} other {# елемента}}",
+    "greeting": "Привіт, {name}!",
+    "terms": "Приймаю <link>умови</link> та <strong>політику конфіденційності</strong>",
+    "role": "{role, select, admin {Адміністратор} editor {Редактор} other {Користувач}}",
+    "labels": {
+      "count": "Кількість",
+      "name": "Ім'я",
+      "role": "Роль"
+    }
+  },
+  "formats": {
+    "title": "Формати",
+    "intro": "Усі формати нижче описані в src/shared/i18n/request.ts.",
+    "date": "Дата (short)",
+    "dateLong": "Дата (long)",
+    "relative": "Відносний час",
+    "number": "Число",
+    "currency": "Валюта",
+    "percent": "Відсоток",
+    "list": "Список"
+  },
+  "blog": {
+    "title": "Блог",
+    "intro": "Приклади динамічних роутів з локалізованою метаінформацією.",
+    "publishedOn": "Опубліковано {date, date, long}",
+    "readMore": "Читати",
+    "noResults": "Постів поки немає."
+  },
+  "contact": {
+    "title": "Зв'язатися з нами",
+    "intro": "Server Action + zod-валідація з перекладеними помилками.",
+    "labels": {
+      "email": "Email",
+      "message": "Повідомлення"
+    },
+    "placeholders": {
+      "email": "you@example.com",
+      "message": "Розкажи, що думаєш…"
+    },
+    "submit": "Надіслати",
+    "submitting": "Надсилаємо…",
+    "successToast": "Дякуємо! Повідомлення отримане.",
+    "errors": {
+      "emailRequired": "Введи email",
+      "emailInvalid": "Введи коректний email",
+      "messageTooShort": "Мінімум {min} символів",
+      "messageTooLong": "Максимум {max} символів",
+      "unknown": "Щось пішло не так. Спробуй ще раз."
+    }
+  },
+  "notFound": {
+    "title": "Сторінку не знайдено",
+    "description": "Ми не знайшли те, що ти шукаєш.",
+    "home": "На головну"
+  },
+  "error": {
+    "title": "Щось пішло не так",
+    "description": "Спробуй ще раз або повернись пізніше.",
+    "tryAgain": "Спробувати знову"
+  }
+}

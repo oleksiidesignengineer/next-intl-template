@@ -1,0 +1,26 @@
+# Localization gate. Intentionally minimal — this template focuses on i18n, so
+# CI verifies only translation integrity + the type-safety that backs it:
+#   - check:translations: key parity, value-type parity, CLIENT_NAMESPACES coverage
+#   - tsc --noEmit: validates the typed message keys / Locale / Formats augmentation
+# Add lint/build/e2e here when you turn this template into a real app.
+name: i18n
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  i18n:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Translation integrity (keys, value types, client namespaces)
+        run: npm run check:translations
+      - name: Type-check translation keys / Locale / Formats
+        run: npm run typecheck
