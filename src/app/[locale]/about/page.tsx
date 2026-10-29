@@ -1,27 +1,18 @@
-import { getTranslations, setRequestLocale } from 'next-intl/server'
-import type { Metadata } from 'next'
+import { getLocale, getTranslations } from 'next-intl/server'
 
-import { type Locale } from '@/shared/i18n/routing'
-import { buildLanguageAlternates } from '@/shared/seo/alternates'
+import { buildPageMetadata } from '@/shared/seo/metadata'
 
-type Props = { params: Promise<{ locale: Locale }> }
-
-export async function generateMetadata({ params }: Props): Promise<Metadata> {
-  const { locale } = await params
-  const t = await getTranslations({ locale, namespace: 'about' })
-  return {
+export async function generateMetadata() {
+  const t = await getTranslations('about')
+  return buildPageMetadata({
+    href: '/about',
     title: t('seo.title'),
     description: t('seo.description'),
-    alternates: buildLanguageAlternates(locale, '/about'),
-  }
+  })
 }
 
-export default async function AboutPage({ params }: Props) {
-  const { locale } = await params
-  // setRequestLocale is required in every server page/layout under [locale]
-  // for SSG. Not needed in generateMetadata above — there the locale is
-  // already passed explicitly to getTranslations({ locale, namespace }).
-  setRequestLocale(locale)
+export default async function AboutPage() {
+  const locale = await getLocale()
   const t = await getTranslations('about')
 
   const jsonLd = {
@@ -37,9 +28,8 @@ export default async function AboutPage({ params }: Props) {
       {/* JSON-LD: tells search engines this is an AboutPage in the active locale. */}
       <script
         type="application/ld+json"
-        // Escape `</` to prevent `</script>` in any string value from breaking out
-        // of the JSON-LD block. Defense in depth — current translations are safe,
-        // but a future CMS-sourced string could contain it.
+        // Escape `<` so a `</script>` inside any string value (e.g. a future
+        // CMS-sourced translation) can't break out of the JSON-LD block.
         dangerouslySetInnerHTML={{
           __html: JSON.stringify(jsonLd).replace(/</g, '\\u003c'),
         }}

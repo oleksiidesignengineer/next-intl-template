@@ -1,21 +1,16 @@
-import { getTranslations, setRequestLocale } from 'next-intl/server'
-import type { Metadata } from 'next'
+import { getLocale, getTranslations } from 'next-intl/server'
 
-import { type Locale } from '@/shared/i18n/routing'
-import { buildLanguageAlternates } from '@/shared/seo/alternates'
-import { ContactForm } from '@/features/contact'
+import { ContactForm, submitContact } from '@/features/contact'
+import { ClientMessages } from '@/shared/i18n/ClientMessages'
+import { buildPageMetadata } from '@/shared/seo/metadata'
 
-type Props = { params: Promise<{ locale: Locale }> }
-
-export async function generateMetadata({ params }: Props): Promise<Metadata> {
-  const { locale } = await params
-  const t = await getTranslations({ locale, namespace: 'contact' })
-  return { title: t('title'), description: t('intro'), alternates: buildLanguageAlternates(locale, '/contact') }
+export async function generateMetadata() {
+  const t = await getTranslations('contact')
+  return buildPageMetadata({ href: '/contact', title: t('title'), description: t('intro') })
 }
 
-export default async function ContactPage({ params }: Props) {
-  const { locale } = await params
-  setRequestLocale(locale)
+export default async function ContactPage() {
+  const locale = await getLocale()
   const t = await getTranslations('contact')
 
   return (
@@ -25,7 +20,14 @@ export default async function ContactPage({ params }: Props) {
         <p className="text-gray-600">{t('intro')}</p>
       </header>
 
-      <ContactForm />
+      {/* Only this page ships `contactForm` — the form's own namespace — to
+          the client. `contact` (title, intro, errors) stays on the server:
+          the action returns already translated error strings. */}
+      <ClientMessages namespaces={['contactForm']}>
+        {/* Server Actions can't read next/root-params, so the locale is bound
+            here, on the server, and the action translates its errors with it. */}
+        <ContactForm action={submitContact.bind(null, locale)} />
+      </ClientMessages>
     </section>
   )
 }

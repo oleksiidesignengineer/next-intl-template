@@ -1,10 +1,11 @@
-import { type Locale } from '@/shared/i18n/routing'
+import type { Locale } from 'next-intl'
 
 /**
- * BCP 47 locale codes for use in OpenGraph metadata.
+ * Locale codes for OpenGraph metadata (`og:locale`).
  *
- * Facebook/LinkedIn use `language_TERRITORY` format (e.g. `en_US`, `ru_RU`).
- * When adding a new locale to `routing.ts`, add its BCP 47 mapping here.
+ * Facebook/LinkedIn expect `language_TERRITORY` (e.g. `en_US`, `uk_UA`).
+ * When adding a locale to routing.ts, add its mapping here — the Record type
+ * makes a missing entry a compile error.
  */
 export const OG_LOCALE: Record<Locale, string> = {
   en: 'en_US',

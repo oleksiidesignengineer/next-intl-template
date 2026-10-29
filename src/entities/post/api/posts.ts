@@ -50,17 +50,17 @@ export const blogPosts: BlogPost[] = [
       en: {
         title: 'i18n best practices for production',
         excerpt: 'Translation parity, fallback strategy, locale persistence — what to set up before launch.',
-        body: 'Run npm run check:translations in CI to catch missing keys before they ship.\n\nFor user-set locale preference, use POST /api/locale to persist the choice in a cookie that the next-intl proxy respects.\n\nKeep en.json (or your default locale) as the single source of truth — let TypeScript derive the Messages type from it.',
+        body: 'Run npm run check:translations in CI to catch missing keys before they ship.\n\nSwitching the language through Link or useRouter from next-intl stores the choice in the NEXT_LOCALE cookie, which the proxy respects on the next visit to /. It is a session cookie by default; to keep it across browser restarts, opt in with localeCookie.maxAge in routing.ts.\n\nKeep en.json (or your default locale) as the single source of truth — let TypeScript derive the Messages type from it.',
       },
       ru: {
         title: 'Best practices i18n для продакшена',
         excerpt: 'Паритет переводов, стратегия fallback, сохранение локали — что настроить до релиза.',
-        body: 'Запускай npm run check:translations в CI, чтобы ловить пропавшие ключи до того, как они уедут в прод.\n\nДля пользовательского выбора локали используй POST /api/locale — он сохраняет выбор в cookie, которую уважает proxy next-intl.\n\nДержи en.json (или твой defaultLocale) единственной точкой правды — пусть TypeScript выводит из него тип Messages.',
+        body: 'Запускай npm run check:translations в CI, чтобы ловить пропавшие ключи до того, как они уедут в прод.\n\nСмена языка через Link или useRouter из next-intl сохраняет выбор в cookie NEXT_LOCALE, которую proxy учитывает при следующем заходе на /. По умолчанию это сессионная cookie; чтобы она переживала перезапуск браузера, включи localeCookie.maxAge в routing.ts.\n\nДержи en.json (или твой defaultLocale) единственной точкой правды — пусть TypeScript выводит из него тип Messages.',
       },
       uk: {
         title: 'Best practices i18n для продакшну',
         excerpt: 'Паритет перекладів, стратегія fallback, збереження локалі — що налаштувати до релізу.',
-        body: 'Запускай npm run check:translations у CI, щоб ловити зниклі ключі до того, як вони поїдуть у прод.\n\nДля вибору локалі користувачем використовуй POST /api/locale — він зберігає вибір у cookie, яку поважає proxy next-intl.\n\nТримай en.json (або твій defaultLocale) єдиною точкою правди — нехай TypeScript виводить з нього тип Messages.',
+        body: 'Запускай npm run check:translations у CI, щоб ловити зниклі ключі до того, як вони поїдуть у прод.\n\nЗміна мови через Link або useRouter з next-intl зберігає вибір у cookie NEXT_LOCALE, яку proxy враховує під час наступного заходу на /. За замовчуванням це сесійна cookie; щоб вона переживала перезапуск браузера, увімкни localeCookie.maxAge у routing.ts.\n\nТримай en.json (або твій defaultLocale) єдиною точкою правди — нехай TypeScript виводить з нього тип Messages.',
       },
     },
   },

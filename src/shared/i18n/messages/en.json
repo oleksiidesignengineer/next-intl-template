@@ -1,8 +1,11 @@
 {
+  "site": {
+    "name": "next-intl template",
+    "description": "Working example of next-intl with App Router, ICU messages, formats and localized URLs."
+  },
   "common": {
-    "loading": "Loading…",
-    "back": "Back",
-    "languageSwitcher": "Language"
+    "languageSwitcher": "Language",
+    "notifications": "Notifications"
   },
   "header": {
     "navLabel": "Main navigation",
@@ -15,15 +18,12 @@
   },
   "home": {
     "title": "next-intl template",
-    "description": "Multilingual setup for Next.js 16 with App Router, ICU messages, localized URLs and full type safety.",
+    "description": "Multilingual setup for Next.js 16 with App Router, ICU messages, localized URLs, type-safe keys and ICU arguments.",
     "links": {
       "about": "About the template",
-      "plurals": "ICU plurals demo",
-      "formats": "Formats demo"
-    },
-    "seo": {
-      "title": "next-intl template",
-      "description": "Working example of next-intl with App Router, ICU messages, formats and localized URLs."
+      "plurals": "ICU messages demo",
+      "formats": "Formats demo",
+      "errors": "Error boundary demo"
     }
   },
   "about": {
@@ -37,10 +37,14 @@
   "plurals": {
     "title": "Plurals & interpolation",
     "intro": "Try changing the count and name below. Switch the locale in the header to see how plural forms differ.",
+    "interactive": "Interactive (Client Component)",
+    "server": "Rendered on the server",
     "items": "{count, plural, =0 {no items} one {# item} other {# items}}",
     "greeting": "Hello, {name}!",
     "terms": "I agree to the <link>terms</link> and <strong>privacy policy</strong>",
     "role": "{role, select, admin {Administrator} editor {Editor} other {User}}",
+    "step": "{step, selectordinal, one {#st} two {#nd} few {#rd} other {#th}} step",
+    "downloads": "{count, number, ::compact-short} {count, plural, one {download} other {downloads}}",
     "labels": {
       "count": "Count",
       "name": "Name",
@@ -49,25 +53,42 @@
   },
   "formats": {
     "title": "Formats",
-    "intro": "All formats below use templates defined in src/shared/i18n/request.ts.",
+    "intro": "Named formats (short, long, withTime, currency, percent) come from src/shared/i18n/request.ts; the rest use inline options.",
     "date": "Date (short)",
     "dateLong": "Date (long)",
+    "dateWithTime": "Date with time",
+    "dateRange": "Date range",
     "relative": "Relative time",
+    "live": "Relative to now (live, Client Component)",
     "number": "Number",
+    "compact": "Compact number",
     "currency": "Currency",
     "percent": "Percent",
     "list": "List"
+  },
+  "errorsDemo": {
+    "title": "Error boundary",
+    "intro": "The button throws during rendering. The localized [locale]/error.tsx catches it, and “Try again” re-renders the segment.",
+    "trigger": "Throw an error"
   },
   "blog": {
     "title": "Blog",
     "intro": "Examples of dynamic routes with localized metadata.",
     "publishedOn": "Published on {date, date, long}",
-    "readMore": "Read more",
     "noResults": "No posts yet."
   },
   "contact": {
     "title": "Contact us",
     "intro": "Server Action + zod validation with translated errors.",
+    "errors": {
+      "emailRequired": "Email is required",
+      "emailInvalid": "Please enter a valid email",
+      "messageTooShort": "{min, plural, one {Message must be at least # character} other {Message must be at least # characters}}",
+      "messageTooLong": "{max, plural, one {Message must be at most # character} other {Message must be at most # characters}}",
+      "unknown": "Something went wrong. Please try again."
+    }
+  },
+  "contactForm": {
     "labels": {
       "email": "Email",
       "message": "Message"
@@ -78,14 +99,7 @@
     },
     "submit": "Send",
     "submitting": "Sending…",
-    "successToast": "Thanks! Your message was received.",
-    "errors": {
-      "emailRequired": "Email is required",
-      "emailInvalid": "Please enter a valid email",
-      "messageTooShort": "Message must be at least {min} characters",
-      "messageTooLong": "Message must be at most {max} characters",
-      "unknown": "Something went wrong. Please try again."
-    }
+    "successToast": "Thanks! Your message was received."
   },
   "notFound": {
     "title": "Page not found",

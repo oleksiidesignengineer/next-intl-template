@@ -1,42 +1,56 @@
 'use server'
 
+import { hasLocale } from 'next-intl'
 import { getTranslations } from 'next-intl/server'
+import { z } from 'zod'
+
+import { routing } from '@/shared/i18n/routing'
 
 import { buildContactSchema } from '../model/schema'
+
+type ContactValues = z.input<ReturnType<typeof buildContactSchema>>
 
 export type ContactFormState =
   | { status: 'idle' }
   | { status: 'success' }
   | {
       status: 'error'
-      fieldErrors?: { email?: string; message?: string }
+      fieldErrors?: Partial<Record<keyof ContactValues, string>>
       formError?: string
+      // Echoed back so the form can keep what the user typed: React resets a
+      // <form action> after EVERY submission, including failed ones.
+      values: ContactValues
     }
 
+/**
+ * The locale is the first, bound argument: next/root-params is not available
+ * in Server Actions, so the page binds it — submitContact.bind(null, locale)
+ * in contact/page.tsx. Bound arguments travel through the client, so validate.
+ */
 export async function submitContact(
+  requestedLocale: string,
   _prevState: ContactFormState,
   formData: FormData
 ): Promise<ContactFormState> {
-  // Server Actions run in request context, so `getTranslations` resolves
-  // the active locale automatically — no need to call `getLocale()` first.
-  const t = await getTranslations('contact.errors')
+  const locale = hasLocale(routing.locales, requestedLocale)
+    ? requestedLocale
+    : routing.defaultLocale
+  const t = await getTranslations({ locale, namespace: 'contact.errors' })
 
-  const schema = buildContactSchema(t)
-
-  const parsed = schema.safeParse({
-    email: formData.get('email'),
-    message: formData.get('message'),
-  })
+  const values: ContactValues = {
+    email: String(formData.get('email') ?? ''),
+    message: String(formData.get('message') ?? ''),
+  }
+  const parsed = buildContactSchema(t).safeParse(values)
 
   if (!parsed.success) {
-    const fieldErrors: { email?: string; message?: string } = {}
-    for (const issue of parsed.error.issues) {
-      const field = issue.path[0]
-      if (field === 'email' || field === 'message') {
-        fieldErrors[field] = issue.message
-      }
+    // First message per field; the messages are already translated.
+    const { fieldErrors } = z.flattenError(parsed.error)
+    return {
+      status: 'error',
+      fieldErrors: { email: fieldErrors.email?.[0], message: fieldErrors.message?.[0] },
+      values,
     }
-    return { status: 'error', fieldErrors }
   }
 
   try {
@@ -44,9 +58,8 @@ export async function submitContact(
     // enqueue a job, etc. The action runs on the server, so secrets stay
     // on the server.
     await new Promise((resolve) => setTimeout(resolve, 500))
-
     return { status: 'success' }
   } catch {
-    return { status: 'error', formError: t('unknown') }
+    return { status: 'error', formError: t('unknown'), values }
   }
 }

@@ -1,30 +1,38 @@
 'use client'
 
 import { useTranslations } from 'next-intl'
-import { useActionState, useEffect, useRef } from 'react'
+import { useActionState, useEffect } from 'react'
 import { toast } from 'sonner'
 
-import { submitContact, type ContactFormState } from '../api/actions'
+import type { ContactFormState } from '../api/actions'
 
 const INITIAL_STATE: ContactFormState = { status: 'idle' }
 
-export function ContactForm() {
-  const t = useTranslations('contact')
-  const formRef = useRef<HTMLFormElement>(null)
-  const [state, formAction, pending] = useActionState(submitContact, INITIAL_STATE)
+type Props = {
+  /**
+   * submitContact with the locale already bound — bind it in a Server
+   * Component (contact/page.tsx). Binding inside this Client Component makes
+   * the no-JS form submission hang on Next.js 16.4.
+   */
+  action: (state: ContactFormState, formData: FormData) => Promise<ContactFormState>
+}
+
+export function ContactForm({ action }: Props) {
+  const t = useTranslations('contactForm')
+  const [state, formAction, pending] = useActionState(action, INITIAL_STATE)
 
   useEffect(() => {
-    if (state.status === 'success') {
-      toast.success(t('successToast'))
-      formRef.current?.reset()
-    }
+    if (state.status === 'success') toast.success(t('successToast'))
   }, [state, t])
 
   const fieldErrors = state.status === 'error' ? state.fieldErrors : undefined
   const formError = state.status === 'error' ? state.formError : undefined
+  // React resets the form after every action; defaultValue restores the
+  // submitted values on error, and an empty form after success.
+  const values = state.status === 'error' ? state.values : undefined
 
   return (
-    <form ref={formRef} action={formAction} className="space-y-4" noValidate>
+    <form action={formAction} className="space-y-4" noValidate>
       <div className="space-y-1">
         <label htmlFor="email" className="block text-sm font-medium">
           {t('labels.email')}
@@ -33,6 +41,7 @@ export function ContactForm() {
           id="email"
           name="email"
           type="email"
+          defaultValue={values?.email}
           placeholder={t('placeholders.email')}
           aria-invalid={Boolean(fieldErrors?.email) || undefined}
           aria-describedby={fieldErrors?.email ? 'email-error' : undefined}
@@ -53,6 +62,7 @@ export function ContactForm() {
           id="message"
           name="message"
           rows={5}
+          defaultValue={values?.message}
           placeholder={t('placeholders.message')}
           aria-invalid={Boolean(fieldErrors?.message) || undefined}
           aria-describedby={fieldErrors?.message ? 'message-error' : undefined}
@@ -68,6 +78,15 @@ export function ContactForm() {
       {formError && (
         <p role="alert" className="text-sm text-red-600">
           {formError}
+        </p>
+      )}
+
+      {/* Rendered on the server too, so the confirmation also shows without
+          JavaScript (the toast above is client-only); role="status" makes
+          screen readers announce it. */}
+      {state.status === 'success' && (
+        <p role="status" className="text-sm text-green-700">
+          {t('successToast')}
         </p>
       )}
 

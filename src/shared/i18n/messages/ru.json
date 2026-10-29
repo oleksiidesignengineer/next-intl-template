@@ -1,8 +1,11 @@
 {
+  "site": {
+    "name": "Шаблон next-intl",
+    "description": "Рабочий пример next-intl с App Router, ICU, форматами и локализованными URL."
+  },
   "common": {
-    "loading": "Загрузка…",
-    "back": "Назад",
-    "languageSwitcher": "Язык"
+    "languageSwitcher": "Язык",
+    "notifications": "Уведомления"
   },
   "header": {
     "navLabel": "Основная навигация",
@@ -15,15 +18,12 @@
   },
   "home": {
     "title": "Шаблон next-intl",
-    "description": "Мультиязычность для Next.js 16: App Router, ICU-сообщения, локализованные URL и типобезопасные ключи.",
+    "description": "Мультиязычность для Next.js 16: App Router, ICU-сообщения, локализованные URL, типобезопасные ключи и ICU-аргументы.",
     "links": {
       "about": "О шаблоне",
-      "plurals": "Демо плюралов",
-      "formats": "Демо форматов"
-    },
-    "seo": {
-      "title": "Шаблон next-intl",
-      "description": "Рабочий пример next-intl с App Router, ICU, форматами и локализованными URL."
+      "plurals": "Демо ICU-сообщений",
+      "formats": "Демо форматов",
+      "errors": "Демо error boundary"
     }
   },
   "about": {
@@ -37,10 +37,14 @@
   "plurals": {
     "title": "Плюралы и интерполяция",
     "intro": "Поменяй число и имя ниже. Переключи язык в шапке, чтобы увидеть разницу в формах множественного числа.",
+    "interactive": "Интерактивно (Client Component)",
+    "server": "Отрендерено на сервере",
     "items": "{count, plural, =0 {нет элементов} one {# элемент} few {# элемента} many {# элементов} other {# элемента}}",
     "greeting": "Привет, {name}!",
     "terms": "Принимаю <link>условия</link> и <strong>политику конфиденциальности</strong>",
     "role": "{role, select, admin {Администратор} editor {Редактор} other {Пользователь}}",
+    "step": "{step, selectordinal, other {#-й}} шаг",
+    "downloads": "{count, number, ::compact-short} {count, plural, one {загрузка} few {загрузки} many {загрузок} other {загрузки}}",
     "labels": {
       "count": "Количество",
       "name": "Имя",
@@ -49,25 +53,42 @@
   },
   "formats": {
     "title": "Форматы",
-    "intro": "Все форматы ниже описаны в src/shared/i18n/request.ts.",
+    "intro": "Именованные форматы (short, long, withTime, currency, percent) описаны в src/shared/i18n/request.ts, остальные заданы опциями на месте.",
     "date": "Дата (short)",
     "dateLong": "Дата (long)",
+    "dateWithTime": "Дата и время",
+    "dateRange": "Диапазон дат",
     "relative": "Относительное время",
+    "live": "Относительно текущего момента (обновляется, Client Component)",
     "number": "Число",
+    "compact": "Компактное число",
     "currency": "Валюта",
     "percent": "Процент",
     "list": "Список"
+  },
+  "errorsDemo": {
+    "title": "Error boundary",
+    "intro": "Кнопка бросает ошибку во время рендера. Локализованный [locale]/error.tsx её перехватывает, а «Попробовать снова» заново рендерит сегмент.",
+    "trigger": "Бросить ошибку"
   },
   "blog": {
     "title": "Блог",
     "intro": "Примеры динамических роутов с локализованной мета-информацией.",
     "publishedOn": "Опубликовано {date, date, long}",
-    "readMore": "Читать",
     "noResults": "Постов пока нет."
   },
   "contact": {
     "title": "Связаться с нами",
     "intro": "Server Action + zod-валидация с переведёнными ошибками.",
+    "errors": {
+      "emailRequired": "Введи email",
+      "emailInvalid": "Введи корректный email",
+      "messageTooShort": "{min, plural, one {Минимум # символ} few {Минимум # символа} many {Минимум # символов} other {Минимум # символа}}",
+      "messageTooLong": "{max, plural, one {Максимум # символ} few {Максимум # символа} many {Максимум # символов} other {Максимум # символа}}",
+      "unknown": "Что-то пошло не так. Попробуй ещё раз."
+    }
+  },
+  "contactForm": {
     "labels": {
       "email": "Email",
       "message": "Сообщение"
@@ -78,14 +99,7 @@
     },
     "submit": "Отправить",
     "submitting": "Отправляем…",
-    "successToast": "Спасибо! Сообщение получено.",
-    "errors": {
-      "emailRequired": "Введите email",
-      "emailInvalid": "Введите корректный email",
-      "messageTooShort": "Минимум {min} символов",
-      "messageTooLong": "Максимум {max} символов",
-      "unknown": "Что-то пошло не так. Попробуй ещё раз."
-    }
+    "successToast": "Спасибо! Сообщение получено."
   },
   "notFound": {
     "title": "Страница не найдена",
