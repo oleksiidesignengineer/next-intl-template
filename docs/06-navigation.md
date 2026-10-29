@@ -1,192 +1,266 @@
 # Навигация
 
-> Для динамических роутов с `[slug]` и паттерна `generateStaticParams` см. [11-dynamic-routes.md](./11-dynamic-routes.md).
+Внутренние ссылки, переходы и редиректы идут через обёртки next-intl. Они делают то, чего нет у `next/link` и `next/navigation`: добавляют префикс локали и применяют маппинг `pathnames` (`/about` → `/ru/o-nas`). Клиентские `Link` и `useRouter` при смене языка ещё и синхронизируют cookie `NEXT_LOCALE`, серверный `redirect` её не трогает.
 
-## Три источника `Link` в проекте
+Смежные темы:
+- почему `pathnames` минимальный и чем за это платишь — [08-pathnames.md](./08-pathnames.md);
+- динамические роуты — [11-dynamic-routes.md](./11-dynamic-routes.md);
+- кто и когда ставит cookie — [13-locale-persistence.md](./13-locale-persistence.md).
 
-| Что нужно | Откуда брать |
-|---|---|
-| Внутренние ссылки между страницами шаблона | `@/shared/ui/Link` |
-| Ссылка на внешний URL | `next/link` или просто `<a>` |
-| Ссылка по маршруту, который УЖЕ описан в `pathnames` и нужна compile-time типизация | `@/shared/i18n/navigation` напрямую |
+## Что откуда импортировать
 
-### Почему обёртка `@/shared/ui/Link`
+| Задача | API | Откуда |
+|---|---|---|
+| Внутренняя ссылка | `Link` (default export) | `@/shared/ui/Link` |
+| Переход из обработчика события | `useRouter` | `@/shared/i18n/navigation` |
+| Текущий путь без префикса локали | `usePathname` | `@/shared/i18n/navigation` |
+| Редирект на сервере | `redirect`, `permanentRedirect` | `@/shared/i18n/navigation` |
+| Локализованный путь строкой (metadata, sitemap) | `localizePath` | `@/shared/i18n/navigation` |
+| Значения динамических сегментов, `notFound()` | `useParams`, `notFound` | `next/navigation` |
+| Внешний URL, якорь на текущей странице | `<a>` | — |
 
-next-intl типизирует свой `Link` строго против ключей `pathnames` в `routing.ts`. Мы держим в `pathnames` только маршруты с разными URL по локалям (см. [08-pathnames](./08-pathnames.md)). Для остальных хочется писать `<Link href="/demo/plurals">` без TypeScript-ошибки.
+Всё, что выше помечено `@/shared/i18n/navigation`, лежит в [src/shared/i18n/navigation.ts](../src/shared/i18n/navigation.ts): один вызов `createNavigation(routing)` и хелпер `localizePath` поверх его `getPathname`. Из `next/navigation` берём только API, которые не строят URL.
 
-Тонкая обёртка [`src/shared/ui/Link.tsx`](../src/shared/ui/Link.tsx) принимает `href: string` и кастует на границе:
+## `Link` — обёртка `@/shared/ui/Link`
+
+Типизированный `Link` из next-intl при заданном `pathnames` принимает только ключи этой карты. В шаблоне там один маршрут (`/about`), поэтому `<Link href="/blog">` из `@/shared/i18n/navigation` не скомпилируется. Обёртка [src/shared/ui/Link.tsx](../src/shared/ui/Link.tsx) принимает любую строку и делает каст в одном месте:
 
 ```tsx
-import { Link as I18nLink } from '@/shared/i18n/navigation'
-import type { ComponentProps } from 'react'
-
 type LinkProps = Omit<ComponentProps<typeof I18nLink>, 'href'> & {
   href: string
 }
 
 export default function Link({ href, ...rest }: LinkProps) {
-  return <I18nLink href={href as never} {...rest} />
+  // '/about?tab=1' → { pathname, query } so `pathnames` still applies;
+  // anchors, external and mailto: links pass through untouched.
+  return <I18nLink href={toLinkHref(href) as never} {...rest} />
 }
 ```
 
-Runtime поведение идентично — next-intl сам разрулит локаль и `pathnames`-маппинг:
+Это сознательное отступление от документации next-intl, в которой при `pathnames` перечисляют все маршруты. Что именно теряется, разобрано в [08-pathnames.md](./08-pathnames.md#trade-off-что-теряешь-с-обёрткой).
 
-```tsx
-import Link from '@/shared/ui/Link'
+Что получается на `/ru/...` (проверено SSR-рендером production-сборки):
 
-// На /ru отрендерится как <a href="/ru/o-nas">
-// На /uk отрендерится как <a href="/uk/pro-nas">
-<Link href="/about">О нас</Link>
+| `href` | Результат |
+|---|---|
+| `/about` | `/ru/o-nas` |
+| `/blog` | `/ru/blog` (маршрута нет в `pathnames`, добавляется только префикс) |
+| `/about?ref=terms` | `/ru/o-nas?ref=terms` |
+| `/about#team` | `/ru/o-nas#team` |
+| `/about?tag=a&tag=b#team` | `/ru/o-nas?tag=a&tag=b#team` |
+| `/about` с `locale="en"` | `/en/about` и `hreflang="en"` на `<a>` |
+| `#team`, `?page=2`, `https://example.com/a?b=1`, `mailto:…` | без изменений |
+| `//cdn.example.com/a?b=1` | `https://cdn.example.com/a?b=1`: без обёртки next-intl считает protocol-relative URL внутренним путём и отдал бы `/ru//cdn.example.com/a?b=1`, поэтому обёртка подставляет `https:` (`toLinkHref`) |
 
-// Просто префикс локали, без маппинга
-<Link href="/demo/plurals">Плюралы</Link>
+### Query и hash: почему строка разбирается
 
-// Явная локаль — независимо от текущей
-<Link href="/about" locale="ru">Switch to Russian</Link>
+next-intl ищет в `pathnames` всю строку `href` целиком. Строка `'/about?ref=terms'` там не найдётся, и голый next-intl `Link` отрендерит `/ru/about?ref=terms` вместо `/ru/o-nas?ref=terms`. В HTML окажется неканоничная ссылка, а клик даст лишний 307 от proxy. Поэтому обёртка раскладывает абсолютный внутренний путь с `?` или `#` в объектную форму через [src/shared/lib/href.ts](../src/shared/lib/href.ts):
+
+```ts
+export function splitHref(href: string): string | HrefObject {
+  if (!href.startsWith('/') || href.startsWith('//') || !/[?#]/.test(href)) return href
+
+  const url = new URL(href, 'http://localhost')
+  return {
+    pathname: url.pathname,
+    ...(url.search && { query: searchParamsToObject(url.searchParams) }),
+    ...(url.hash && { hash: url.hash.slice(1) }),
+  }
+}
 ```
 
-**Trade-off**: теряется compile-time проверка на опечатки в `href`. Если для какого-то маршрута эта проверка критична — добавь его в `pathnames` и импортируй `Link` напрямую из `@/shared/i18n/navigation`.
+- Разбираются только пути, которые начинаются с одного `/`. Якорь `#team`, `?page=2`, относительный путь, `https://…`, `mailto:` и `tel:` возвращаются как есть, и next-intl оставляет их без префикса. Protocol-relative `//cdn…` тоже начинается с `/`, и голый next-intl `Link` добавил бы к нему префикс локали (`/ru//cdn.example.com/a?b=1`). Поэтому обёртка сначала вызывает `toLinkHref`, который подставляет `https:`, и только потом `splitHref`. Проверено SSR-рендером на `/ru`.
+- [`searchParamsToObject`](../src/shared/lib/search-params.ts) сохраняет повторяющиеся параметры (`?tag=a&tag=b` → `{ tag: ['a', 'b'] }`). `Object.fromEntries` оставил бы только последнее значение.
 
-## `router.push(path, { locale })`
+Покрытие тестами:
+- unit — [tests/unit/href.test.ts](../tests/unit/href.test.ts): разбор и все пропускаемые формы;
+- e2e — `the shared Link localizes pathnames, also with a query string` в [tests/e2e/routing.spec.ts](../tests/e2e/routing.spec.ts).
 
-Программное переключение локали без перезагрузки страницы:
+### `locale` на ссылке
+
+`<Link href="/about" locale="en">` всегда рендерит префикс, даже для дефолтной локали при `as-needed`: `/en/about`. Так задумано в next-intl. Остальное включается, только если `locale` отличается от текущей локали страницы. Тогда:
+
+- Если по ссылке кликнут до гидрации, браузер сделает обычный document-запрос, proxy обновит cookie и редиректнет `/en/about` → `/about`.
+- После гидрации cookie выставляет обработчик клика (`document.cookie`).
+- Prefetch отключён: по документации next-intl, он «would otherwise result in prematurely overwriting the locale cookie». Если передать `prefetch` вместе с `locale`, next-intl в dev выведет `console.error`.
+
+## `useRouter`
 
 ```tsx
+// Example
 'use client'
 import { useRouter } from '@/shared/i18n/navigation'
 
 const router = useRouter()
-
-// Перейти на /about в локали ru → /ru/o-nas
-router.push('/about', { locale: 'ru' })
-
-// Остаться на той же странице, поменяв локаль
-router.replace(pathname, { locale: 'uk' })
+router.push('/about')                      // on /ru/... → /ru/o-nas
+router.push({ pathname: '/about', query: { tab: 'team' } })
+router.replace('/about', { locale: 'uk' }) // → /uk/pro-nas, cookie NEXT_LOCALE=uk
 ```
 
-## `usePathname` без локального префикса
+- С опцией `locale` роутер, как и `Link`, принудительно ставит префикс: переход на `en` идёт через `/en/...` → 307 → `/about`. Перед навигацией он пишет cookie через `document.cookie`.
+- То же делает `router.prefetch(href, { locale })`: он тоже пишет cookie. Не префетчи страницы другой локали.
+- Hash роутер не сохраняет: из объектного `href` он берёт только `pathname`, `params` и `query`.
+- Типы у роутера строгие, обёртки для него нет: `router.push('/blog')` даёт TS2345, потому что `/blog` нет в `pathnames`. Варианты описаны в [08-pathnames.md](./08-pathnames.md#trade-off-что-теряешь-с-обёрткой).
 
-`usePathname` из `@/shared/i18n/navigation` возвращает **canonical внутренний путь** — без префикса локали и без локализованного сегмента.
+## `usePathname`
 
-Пример: пользователь находится на `/ru/o-nas`.
+Возвращает канонический внутренний путь: без префикса локали и без локализованного сегмента.
 
-- `usePathname()` из `next/navigation` → `/ru/o-nas`
-- `usePathname()` из `@/shared/i18n/navigation` → `/about`
+| Где пользователь | `next/navigation` | `@/shared/i18n/navigation` |
+|---|---|---|
+| `/ru/o-nas` | `/ru/o-nas` | `/about` |
+| `/uk/blog/hello-world` | `/uk/blog/hello-world` | `/blog/hello-world` (маршрута нет в `pathnames`) |
+| динамический маршрут из `pathnames` | фактический URL | шаблон, например `/news/[slug]` (значения нужно брать из `useParams`) |
 
-Это критично для LangSwitcher: `router.replace('/about', { locale: 'uk' })` переведёт на `/uk/pro-nas`. Если бы `usePathname` вернул `/ru/o-nas`, ручная замена префикса дала бы `/uk/o-nas` — несуществующий URL.
+## `redirect` и `permanentRedirect`
 
-## LangSwitcher — канонический паттерн
+```ts
+// Example
+import { redirect } from '@/shared/i18n/navigation'
 
-Разбор `src/features/locale-switch/ui/LangSwitcher.tsx`:
+redirect({ href: '/about', locale: 'ru' }) // → /ru/o-nas
+```
+
+- `locale` обязателен. В Server Component текущую локаль даёт `getLocale()` из `next-intl/server`. В Server Action и Route Handler root params недоступны, поэтому локаль передаётся явно ([12-server-actions.md](./12-server-actions.md)).
+- Коды ответа задаёт Next.js: `redirect` отвечает 307, `permanentRedirect` — 308. В Server Action при включённом JS выполняется клиентская навигация, а при отправке формы без JS Next отвечает 303.
+- `redirect` бросает исключение, поэтому в `try/catch` его вызывают снаружи блока. Чтобы TypeScript сузил тип после вызова, пиши `return redirect(...)`.
+- Серверный `redirect` cookie не трогает. Если язык меняется на сервере, cookie ставь сам ([13-locale-persistence.md](./13-locale-persistence.md#после-логина-язык-из-профиля)).
+- `forcePrefix: true` принудительно ставит префикс и для дефолтной локали.
+
+## `localizePath` — путь строкой вне JSX
+
+`getPathname` строго типизирован так же, как `Link`. Для произвольного внутреннего пути шаблон даёт хелпер [src/shared/i18n/navigation.ts](../src/shared/i18n/navigation.ts) с тем же кастом и тем же разбором строки, что у `Link`:
+
+```ts
+export function localizePath(locale: Locale, href: string): string {
+  const split = splitHref(href)
+  if (typeof split === 'string') {
+    // Untyped href: the same deliberate trade-off as in @/shared/ui/Link.
+    return getPathname({ locale, href: split as never })
+  }
+  // getPathname ignores the hash, so it is appended here.
+  const { hash, ...rest } = split
+  return getPathname({ locale, href: rest as never }) + (hash ? `#${hash}` : '')
+}
+```
+
+Результаты (проверено рендером на production-сборке):
+- `localizePath('ru', '/about')` → `/ru/o-nas`;
+- `localizePath('en', '/blog')` → `/blog`;
+- `localizePath('ru', '/about?x=1')` → `/ru/o-nas?x=1`;
+- `localizePath('ru', '/about#team')` → `/ru/o-nas#team`.
+
+Hash хелпер дописывает сам: `getPathname` берёт из объекта только `pathname`, `params` и `query`. На `localizePath` построены canonical, hreflang и sitemap ([src/shared/seo/alternates.ts](../src/shared/seo/alternates.ts), подробно — в [07-metadata-seo.md](./07-metadata-seo.md)).
+
+Оговорка: `getPathname` возвращает путь без `basePath`. Если включишь `basePath`, добавляй его при сборке абсолютного URL.
+
+## LangSwitcher
+
+[src/features/locale-switch/ui/LangSwitcher.tsx](../src/features/locale-switch/ui/LangSwitcher.tsx) — Client Component, у которого на сервере нет ничего, что выбило бы его из статического HTML. Основа повторяет рецепт next-intl: `usePathname` + `useParams` + `router.replace(..., { locale })`. К нему добавлены три решения.
+
+### 1. Query читается в момент переключения, а не через `useSearchParams`
 
 ```tsx
-'use client'
-
-import { useLocale } from 'next-intl'
-import { useParams, useSearchParams } from 'next/navigation'
-import { useTransition } from 'react'
-
-import { usePathname, useRouter } from '@/shared/i18n/navigation'
-import { routing, type Locale } from '@/shared/i18n/routing'
-import { LOCALE_NATIVE_NAMES } from '@/shared/config/locales'
-
-function searchParamsToObject(params: URLSearchParams): Record<string, string | string[]> {
-  const result: Record<string, string | string[]> = {}
-  for (const key of new Set(params.keys())) {
-    const values = params.getAll(key)
-    result[key] = values.length === 1 ? values[0] : values
-  }
-  return result
-}
-
-export default function LangSwitcher() {
-  const router = useRouter()
-  const pathname = usePathname()   // canonical: '/about', а не '/ru/o-nas'
-  const params = useParams()       // { locale: 'ru' } — нужен для динамических сегментов
-  const current = useLocale()
-  const [pending, startTransition] = useTransition()
-  const searchParams = useSearchParams()
-
-  return (
-    <select
-      value={current}
-      disabled={pending}
       onChange={(event) => {
         const next = event.target.value as Locale
-        const query = searchParamsToObject(searchParams)
+        // Read the query at the moment of switching instead of via
+        // useSearchParams(): that hook would opt the switcher out of static
+        // rendering (it'd render only on the client, inside a Suspense boundary).
+        // The #hash is not kept: next-intl's router ignores it, and navigating
+        // around it would mean re-implementing its cookie sync.
+        const query = searchParamsToObject(new URLSearchParams(window.location.search))
         startTransition(() => {
           router.replace(
-            // @ts-expect-error -- TypeScript проверяет соответствие params и pathname.
-            // На текущем маршруте они всегда совпадают, но статически это не выводится.
+            // @ts-expect-error -- TypeScript validates that only known params
+            // are used with a given pathname. Since we're on the current route,
+            // they always match at runtime.
             { pathname, params, query },
             { locale: next }
           )
         })
       }}
-    >
-      {routing.locales.map((loc) => (
-        <option key={loc} value={loc}>{LOCALE_NATIVE_NAMES[loc]}</option>
-      ))}
-    </select>
-  )
-}
 ```
 
-**Зачем `useParams` из `next/navigation`** — нужен для динамических сегментов (например, `/blog/[slug]`). Без него `router.replace` не знает значение `slug` и не сможет построить URL. Даже если на текущей странице нет динамических сегментов, передавать `params` — правильная привычка.
+Документация Next.js про `useSearchParams`: «If a route is prerendered, calling `useSearchParams` will cause the Client Component tree up to the closest `Suspense` boundary to be client-side rendered». В предыдущей версии шаблона так и было: на SSG-страницах в HTML шапки вместо `<select>` стоял пустой `<template>` от Suspense, и переключатель появлялся только после гидрации. Query нужен только в момент выбора, а `window.location.search` внутри обработчика события ничего не стоит.
 
-**Зачем `{ pathname, params, query }` объектом, а не строкой** — `router.replace` принимает либо строку (для маршрутов без параметров), либо объект. Объект нужен для случаев с динамическими сегментами. Поле `query` сохраняет текущий query string при смене локали.
-
-**Зачем `searchParamsToObject` вместо `Object.fromEntries`** — `Object.fromEntries(searchParams.entries())` при мультизначных параметрах (`?tag=a&tag=b`) оставляет только последнее значение. `searchParamsToObject` через `getAll` сохраняет все значения, возвращая массив там, где их несколько. Без этого фильтрация на страницах с несколькими тегами ломается при смене языка.
-
-**Зачем `@ts-expect-error`** — TypeScript знает все допустимые пары `(pathname, params)` из `pathnames` конфига. При передаче объекта он требует точного соответствия типов. На runtime всё правильно, но статически вывести это нельзя, поэтому подавляем ошибку.
-
-**Зачем `useTransition`** — `router.replace` запускает навигацию асинхронно. `startTransition` помечает её как низкоприоритетное обновление, что позволяет React не блокировать UI во время перехода. `pending` используется для `disabled` на `<select>` — пользователь не может переключить язык дважды подряд пока идёт переход.
-
-## `redirect` / `permanentRedirect` в Server Component
-
-```ts
-import { redirect } from '@/shared/i18n/navigation'
-
-// В server page или Route Handler:
-redirect({ href: '/about', locale: 'ru' })  // → /ru/o-nas (307)
-
-import { permanentRedirect } from '@/shared/i18n/navigation'
-permanentRedirect({ href: '/about', locale: 'en' })  // → /about (308)
-```
-
-Использовать вместо `redirect` из `next/navigation`, когда важно сохранить `pathnames` mapping. Next.js использует коды **307** (временный) и **308** (постоянный) вместо классических 302/301 — это сохраняет HTTP-метод запроса при редиректе (в Server Action `redirect` отдаёт 303).
-
-## `getPathname` — вне React
-
-Для случаев, где нет React context: sitemap, email-шаблоны, шеринг ссылок, скрипты.
-
-```ts
-import { getPathname } from '@/shared/i18n/navigation'
-
-const url = `https://example.com${getPathname({ locale: 'ru', href: '/about' })}`
-// → https://example.com/ru/o-nas
-
-const ukUrl = `https://example.com${getPathname({ locale: 'uk', href: '/about' })}`
-// → https://example.com/uk/pro-nas
-```
-
-`getPathname` уважает `pathnames` mapping из `routing.ts` — ручная конкатенация не справилась бы с локализованными сегментами.
-
-## Known limitation: URL hash (anchor) теряется при смене языка
-
-`router.replace({ pathname, params, query }, { locale })` не сохраняет hash (`#section`). Если пользователь на `/about#our-team` переключит язык, скролл-якорь пропадёт.
-
-Это marginal use case — реально влияет только на длинные документы с TOC и landing-страницы с прыжками по разделам. Для типового приложения незаметно.
-
-Если нужно — добавь в `LangSwitcher` после `router.replace`:
+### 2. Подписи и названия языков приходят пропами с сервера
 
 ```tsx
-const hash = typeof window !== 'undefined' ? window.location.hash : ''
-// ... router.replace(...)
-if (hash) {
-  // После следующего render'а вернём якорь:
-  requestAnimationFrame(() => {
-    window.history.replaceState(null, '', window.location.pathname + window.location.search + hash)
-  })
-}
+        <LangSwitcher
+          label={tCommon('languageSwitcher')}
+          options={routing.locales.map((locale) => ({
+            locale,
+            name: LOCALE_NATIVE_NAMES[locale],
+          }))}
+        />
+```
+
+Фрагмент взят из [src/widgets/site-header/ui/SiteHeader.tsx](../src/widgets/site-header/ui/SiteHeader.tsx). Это даёт две вещи:
+
+- Namespace `common` не уходит на клиент. Layout отдаёт клиенту только `error`, и e2e это проверяет. Для пары строк передать готовый текст пропом дешевле, чем `<ClientMessages>` ([03-translations.md](./03-translations.md)).
+- Названия языков считает `Intl.DisplayNames` один раз и на сервере ([src/shared/config/locales.ts](../src/shared/config/locales.ts)). Если считать их в браузере, ICU-данные Node и браузера могут разойтись, и получится hydration mismatch.
+
+У каждого `<option>` стоит `lang={locale}`, чтобы скринридер читал «Русский» по-русски.
+
+### 3. `pathname` + `params`, а не готовый URL
+
+`usePathname` отдаёт внутренний путь (`/about`), и next-intl заново собирает URL для новой локали (`/uk/pro-nas`). `params` из `useParams` нужны маршрутам с динамическими сегментами из `pathnames`: для них `usePathname` возвращает шаблон (`/news/[slug]`), и без значений URL не собрать. Маршрутам вне `pathnames` (`/blog/[slug]` в шаблоне) `params` не мешают. `@ts-expect-error` взят из документации next-intl: статически TypeScript не может доказать, что `params` подходят к `pathname`. `useTransition` блокирует `<select>` (`disabled={pending}`), пока идёт переход.
+
+Переход на дефолтную локаль идёт через `/en/...` → 307 → `/about`. Это не баг, а `forcePrefix` из раздела про `useRouter`.
+
+**Что покрыто e2e** ([tests/e2e/i18n.spec.ts](../tests/e2e/i18n.spec.ts), `language switcher`):
+- `<select>` есть в серверном HTML;
+- сохраняются локализованный путь и многозначный query (`/about?tag=a&tag=b` → `/ru/o-nas?tag=a&tag=b`);
+- выставляется cookie;
+- переход на дефолтную локаль (`/ru/o-nas` → `/about`) проходит без ошибок в консоли;
+- сохраняется `/blog/hello-world` при смене языка.
+
+**Hash теряется.** С `/about#team` после смены языка попадёшь на `/ru/o-nas`: роутер игнорирует `hash` (см. выше). Обойти роутер ради hash значило бы повторить его синхронизацию cookie, поэтому в шаблоне этого нет. Если якоря важны, например у длинных документов с оглавлением, восстанавливай их сам после навигации.
+
+**Альтернатива — список ссылок** `<Link href={...} locale="uk">` вместо `<select>`. Такие ссылки работают до гидрации, а ссылки на другие языки сами ставят `hreflang`. Минус: при рендере неоткуда взять query и hash текущей страницы. Hash до сервера не доходит вообще, а query на клиенте снова означает `useSearchParams` и CSR-bailout. Поэтому такие ссылки сохраняют только путь.
+
+## Почему не `next/link` и не `next/navigation`
+
+Эти API не знают ни про префикс, ни про `pathnames`, ни про cookie:
+
+- **`usePathname` из `next/navigation`** возвращает `/ru/o-nas`. Если подставить его в переключатель, получится так (проверено на production-сборке):
+  - смена ru → en: `/en/ru/o-nas` → 307 на `/ru/o-nas`, язык молча не меняется;
+  - смена ru → uk: `/uk/ru/o-nas` → 404.
+- **`next/link`** с `href="/about"` на русской странице ведёт на URL дефолтной локали. Дальше proxy выбирает язык по cookie `NEXT_LOCALE`, а если её нет — по `Accept-Language`. Выпало `ru` — будет лишний 307 на `/ru/o-nas`, иначе пользователь увидит английскую страницу.
+- **`useRouter` из `next/navigation`** не пишет cookie. При soft-навигации proxy cookie тоже не обновляет, он делает это только на document-запросах. В итоге cookie остаётся со старым языком, и следующий заход на `/` уведёт на него ([13-locale-persistence.md](./13-locale-persistence.md#кто-и-когда-ставит-cookie)).
+- **`redirect` из `next/navigation`** не добавляет префикс и не применяет маппинг.
+
+Из `next/navigation` спокойно бери `notFound`, `useParams`, `useSelectedLayoutSegment`. `useSearchParams` тоже можно, но помни про Suspense и CSR-bailout.
+
+В шаблоне запрет закреплён правилом `no-restricted-imports` в [eslint.config.mjs](../eslint.config.mjs) (`paths: i18nNavigationPaths` рядом с FSD-паттернами):
+
+```js
+// Locale-aware navigation only: Next's own Link/router know nothing about the
+// locale prefix or `pathnames` (/about → /ru/o-nas).
+const i18nNavigationPaths = [
+  {
+    name: "next/link",
+    message: "Use Link from @/shared/ui/Link (locale prefix + localized pathnames).",
+  },
+  {
+    name: "next/navigation",
+    importNames: ["useRouter", "usePathname", "redirect", "permanentRedirect"],
+    message: "Import it from @/shared/i18n/navigation (locale-aware).",
+  },
+];
+```
+
+Пробный файл с `next/link` и семью импортами из `next/navigation` (`useRouter`, `usePathname`, `redirect`, `permanentRedirect`, `useParams`, `notFound`, `useSelectedLayoutSegment`) получает пять ошибок: `next/link` и четыре запрещённых имени. `useParams`, `notFound` и `useSelectedLayoutSegment` проходят.
+
+Исключение — корневые 404 [src/app/global-not-found.tsx](../src/app/global-not-found.tsx) и [src/app/not-found.tsx](../src/app/not-found.tsx). Они рендерятся для запросов без локали и вне `NextIntlClientProvider`, так что `next/link` там законен. Для них отдельный блок конфига оставляет только FSD-паттерны:
+
+```js
+  // The two root 404s render without a locale: plain next/link to "/" is
+  // right there (the proxy picks the visitor's locale).
+  {
+    files: ["src/app/global-not-found.tsx", "src/app/not-found.tsx"],
+    rules: {
+      "no-restricted-imports": ["error", { patterns: fsdPatterns }],
+    },
+  },
 ```

@@ -1,23 +1,31 @@
-import { IntlErrorCode, hasLocale } from 'next-intl'
+import { notFound } from 'next/navigation'
+import * as rootParams from 'next/root-params'
+import { type Formats, IntlErrorCode, hasLocale } from 'next-intl'
 import { getRequestConfig } from 'next-intl/server'
 
 import { routing } from './routing'
-import type EnMessages from './messages/en.json'
 
 /**
  * Global formats shared across the whole app. Exported so its type can augment
  * `AppConfig['Formats']` in src/global.d.ts — that makes named format strings
  * ('short', 'currency', …) type-checked and autocompleted at every
- * `format.dateTime(date, 'short')` / `t('price', { value })` call site.
+ * `format.dateTime(date, 'short')` call site.
+ *
+ * A name that matches a built-in ICU style (`short`, `long`, `currency`,
+ * `percent`, …) is also applied to that style inside messages (merged with it
+ * field by field), e.g.
+ * `{date, date, long}` in blog.publishedOn uses `long` below.
  */
 export const formats = {
   dateTime: {
     short: { day: 'numeric', month: 'short', year: 'numeric' },
-    long: {
+    long: { day: 'numeric', month: 'long', year: 'numeric' },
+    withTime: {
       day: 'numeric',
       month: 'long',
       year: 'numeric',
-      hour: '2-digit',
+      // 'numeric', not '2-digit': "8:30 PM" in en, "20:30" in ru/uk.
+      hour: 'numeric',
       minute: '2-digit',
     },
   },
@@ -25,7 +33,7 @@ export const formats = {
     currency: { style: 'currency', currency: 'EUR' },
     percent: { style: 'percent', maximumFractionDigits: 1 },
   },
-} as const
+} satisfies Formats
 
 type Messages = Record<string, unknown>
 
@@ -61,52 +69,57 @@ function deepMerge(base: Messages, override: Messages): Messages {
  * the active locale to keep the bundle lean). We opt in here by merging the
  * default-locale dictionary underneath the active one.
  */
-async function loadMessages(locale: string): Promise<typeof EnMessages> {
-  const localeMessages = (await import(`./messages/${locale}.json`))
-    .default as Messages
-  if (locale === routing.defaultLocale)
-    return localeMessages as typeof EnMessages
+async function loadMessages(locale: string) {
+  const messages: Messages = (await import(`./messages/${locale}.json`)).default
+  if (locale === routing.defaultLocale) return messages
 
-  const defaultMessages = (
+  const fallback: Messages = (
     await import(`./messages/${routing.defaultLocale}.json`)
-  ).default as Messages
-  return deepMerge(defaultMessages, localeMessages) as typeof EnMessages
+  ).default
+  return deepMerge(fallback, messages)
 }
 
-export default getRequestConfig(async ({ requestLocale }) => {
-  const requested = await requestLocale
-  const locale = hasLocale(routing.locales, requested)
-    ? requested
-    : routing.defaultLocale
+export default getRequestConfig(async ({ locale }) => {
+  // `locale` is an explicit override from the caller — e.g.
+  // getTranslations({ locale, namespace }) in a Server Action or Route
+  // Handler, where next/root-params is not available (Next.js plans support
+  // for Route Handlers only).
+  if (!locale) {
+    // The value of the [locale] segment of the root layout. Works during
+    // static rendering — no setRequestLocale needed in pages/layouts.
+    const param = await rootParams.locale()
+    if (!hasLocale(routing.locales, param)) notFound()
+    locale = param
+  }
 
   return {
     locale,
     messages: await loadMessages(locale),
     timeZone: 'Europe/Kyiv',
+    // A shared `now` keeps server-rendered relative times and the client's
+    // useNow() consistent during hydration. On statically rendered pages it is
+    // the time of the build — useNow({ updateInterval }) refreshes it.
+    // Remove it when enabling `cacheComponents`: new Date() during prerender
+    // fails the build there. The other steps of that switch are listed in
+    // docs/02-app-router.md (Cache Components).
     now: new Date(),
     formats,
-    // Real API misuse goes to console in dev and SHOULD be wired to your
-    // error tracker (Sentry, etc.) in production. Missing-message errors
-    // are expected during development — they get logged only in dev and
-    // surface in the UI via `getMessageFallback` below.
     onError(error) {
-      if (error.code !== IntlErrorCode.MISSING_MESSAGE) {
-        console.error('[next-intl] API misuse:', error)
+      if (error.code === IntlErrorCode.MISSING_MESSAGE) {
+        // Missing keys are already backfilled from the default locale (see
+        // loadMessages), so reaching this means the key is missing in en.json
+        // too — a real bug, not an untranslated string.
+        console.error('[next-intl] Missing message:', error.message)
         return
       }
-      if (process.env.NODE_ENV === 'development') {
-        console.warn('[next-intl] Missing translation:', error.message)
-      }
+      // Wire both branches to your error tracker (Sentry, etc.) in production.
+      console.error('[next-intl]', error)
     },
-    // Reached only when a key is missing in BOTH the active locale and the
-    // default-locale fallback (see loadMessages). Dev returns a visible marker
-    // so the gap stands out in the UI; prod returns the key path.
+    // Only applies to Server Components: functions can't cross to the client,
+    // so Client Components use next-intl's default (`namespace.key`).
     getMessageFallback({ namespace, key }) {
       const path = [namespace, key].filter(Boolean).join('.')
-      if (process.env.NODE_ENV === 'development') {
-        return `[!${path}]`
-      }
-      return path
+      return process.env.NODE_ENV === 'development' ? `[!${path}]` : path
     },
   }
 })

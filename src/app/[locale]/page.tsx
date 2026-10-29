@@ -1,25 +1,21 @@
-import { getTranslations, setRequestLocale } from 'next-intl/server'
-import type { Metadata } from 'next'
+import { getTranslations } from 'next-intl/server'
 
-import { type Locale } from '@/shared/i18n/routing'
-import { buildLanguageAlternates } from '@/shared/seo/alternates'
+import { buildPageMetadata } from '@/shared/seo/metadata'
 import Link from '@/shared/ui/Link'
 
-type Props = { params: Promise<{ locale: Locale }> }
-
-// Only `alternates` here — title/description are inherited from the locale
-// layout's generateMetadata (its title.default/template). This adds the
-// self-referencing canonical + hreflang the home page would otherwise lack.
-export async function generateMetadata({ params }: Props): Promise<Metadata> {
-  const { locale } = await params
-  return {
-    alternates: buildLanguageAlternates(locale, '/'),
-  }
+export async function generateMetadata() {
+  const t = await getTranslations('site')
+  return buildPageMetadata({
+    href: '/',
+    title: t('name'),
+    description: t('description'),
+    absoluteTitle: true,
+  })
 }
 
-export default async function Home({ params }: Props) {
-  const { locale } = await params
-  setRequestLocale(locale)
+export default async function Home() {
+  // No params and no setRequestLocale: getTranslations reads the locale from
+  // next/root-params (src/shared/i18n/request.ts), and the page stays static.
   const t = await getTranslations('home')
 
   return (
@@ -40,6 +36,11 @@ export default async function Home({ params }: Props) {
         <li>
           <Link href="/demo/formats" className="text-blue-600 hover:underline">
             {t('links.formats')}
+          </Link>
+        </li>
+        <li>
+          <Link href="/demo/errors" className="text-blue-600 hover:underline">
+            {t('links.errors')}
           </Link>
         </li>
       </ul>

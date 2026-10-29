@@ -5,6 +5,35 @@ Design (FSD), trimmed to what actually pays for itself in a mid-sized
 Next.js app. This document is the reusable reference — drop it into any
 Next.js project and adapt the slice inventory to your domain.
 
+## Как гайд применён в этом шаблоне
+
+Гайд общий и потому на английском: его можно унести в любой проект. Здесь — как он ложится на шаблон и чего из него в шаблоне нет.
+
+```
+src/
+  app/[locale]/            # root layout + routes; one page's client islands in <route>/_components/
+  widgets/site-header/     # server widget: navigation + LangSwitcher, rendered by [locale]/layout.tsx
+  features/contact/        # ui/ContactForm (client), api/actions.ts (Server Action), model/schema.ts (zod)
+  features/locale-switch/  # ui/LangSwitcher (client island)
+  entities/post/           # model/types.ts, api/posts.ts (stub data source, no ui/)
+  shared/
+    config/                # locales.ts (native names, text direction), site.ts (SITE_URL)
+    i18n/                  # routing, request config, navigation, ClientMessages, messages/*.json
+    lib/                   # href.ts, search-params.ts
+    seo/                   # page metadata, hreflang, OG image path, og:locale codes
+    styles/  ui/           # globals.css; the Link wrapper
+```
+
+- **Границы.** Обход бареля ловит правило `no-restricted-imports` в [eslint.config.mjs](../eslint.config.mjs) — те же паттерны, что в разделе [Enforcement](#enforcement). Из чужого слайса импортируй только через его `index.ts`, внутри своего — относительными путями (`../model/schema`): `@/features/contact/model/schema` линтер запрещает и изнутри слайса. Направление слоёв из таблицы [Import rules](#import-rules-the-one-rule-that-matters) линтер не проверяет: `@/widgets/…` из сущности, барель другой фичи из фичи и относительный `../../features/x/ui/…` проходят. За этим следи на ревью.
+- **Алиас.** `@/*` → `./src/*` в [tsconfig.json](../tsconfig.json), без `baseUrl`.
+- **Маршруты.** Все страницы лежат под `src/app/[locale]/`, а `src/app/[locale]/layout.tsx` — root layout (файла `src/app/layout.tsx` нет). Только так `[locale]` становится root param, который читает `next/root-params` ([02-app-router.md](./02-app-router.md)). В корне `src/app/` остались только файлы без локали: `sitemap.ts`, `robots.ts`, `favicon.ico`, корневые 404 (`global-not-found.tsx`, `not-found.tsx`) и `global-error.tsx`. Пути из примеров ниже вида `src/app/(app)/…` здесь превращаются в `src/app/[locale]/(app)/…`.
+- **Островки одной страницы.** Клиентские островки демо-страниц — не слайсы, а приватные папки Next `_components/` рядом с маршрутом. Это и есть вариант «inline code in `src/app/<route>/`» из раздела [Maintenance](#maintenance).
+- **Чего нет.** TanStack Query, Zustand, `shared/api`, `shared/auth` и `shared/state` в шаблоне отсутствуют. Разделы о них описывают, куда их положить, *если добавишь*.
+- **Сниппеты ниже — обобщённые примеры, а не код шаблона.** Это касается и `entities/post` с `PostCard` и `usePost`: настоящий слайс в шаблоне состоит только из `model/` и `api/`, а его барель экспортирует `getAllPosts`, `getPostBySlug` и типы. И навигация в шаблоне своя: `Link` бери из `@/shared/ui/Link`, а `useRouter`, `usePathname`, `redirect` — из `@/shared/i18n/navigation`. То же правило `no-restricted-imports` запрещает `next/link` и эти импорты из `next/navigation`, так что `usePathname` из `next/navigation` в примерах ниже здесь не пройдёт линт.
+- **i18n и слои.** Инфраструктура i18n (`routing`, `request`, `navigation`) одна на приложение и лежит в `shared/i18n`. Переводы — это namespace'ы в `messages/<locale>.json`, а не файлы внутри слайсов. Namespace обычно соответствует слайсу или странице: `contactForm` ↔ клиентская форма `features/contact`, `contact` ↔ страница `/contact` и ошибки её action (остаются на сервере), `header` ↔ `widgets/site-header`.
+- **Где `'use client'`.** Серверные виджеты и фичи переводят через `getTranslations`, и их строки на клиент не уходят. Клиентский лист получает текст пропами (`LangSwitcher`) или через `<ClientMessages>` на странице (`ContactForm`) — см. [03-translations.md](./03-translations.md).
+- **Server Action.** Живёт в фиче (`features/contact/api/actions.ts`) и экспортируется через барель. Локаль в неё привязывает страница — [12-server-actions.md](./12-server-actions.md).
+
 ## Goal
 
 Three key distinctions drive the whole layout:
@@ -37,10 +66,10 @@ src/
     ui/               # design-system primitives (Button, Dialog, Select …)
     utils/            # pure helpers (url, date, formatters …)
     hooks/            # generic React hooks (no domain coupling)
-    api/              # HTTP client, queryClient, interceptors, transports
+    api/              # HTTP client, queryClient, interceptors (if you add them)
     auth/             # auth provider, session, cookies, schemas (optional)
-    state/            # cross-feature Zustand stores
-    i18n/             # locale loaders, translation hooks
+    state/            # cross-feature Zustand stores (if you add Zustand)
+    i18n/             # i18n routing, request config, navigation, messages
     config/           # feature flags, env access
     styles/           # global & theme CSS
     lib/              # misc reusable code that doesn't fit elsewhere
@@ -79,9 +108,12 @@ A slice can import from **its own layer or lower**:
 
 Use ESLint's built-in `no-restricted-imports` to block cross-slice deep
 imports — consumers must go through the slice's `index` barrel, not
-reach into `@/entities/*/ui/...` or `@/features/*/hooks/...`. Allow
-test overrides for `jest.mock(...)` and `import * as` namespace
-patterns. A minimal example:
+reach into `@/entities/*/ui/...` or `@/features/*/hooks/...`. If
+tests need a slice's internals (to spy on a module via
+`import * as api from '@/features/x/api/...'`), give test files an override:
+`import * as` and `import type` are checked like any import, while
+`jest.mock('...')` strings and dynamic `import()` are not checked at
+all. A minimal example:
 
 ```js
 // eslint.config.mjs
@@ -104,17 +136,34 @@ patterns. A minimal example:
 }
 ```
 
+This template ships the same three patterns in `eslint.config.mjs`
+(`fsdPatterns`). Its rule also has `paths`: they ban `next/link` and
+`useRouter` / `usePathname` / `redirect` / `permanentRedirect` from
+`next/navigation` in favour of the locale-aware `@/shared/ui/Link` and
+`@/shared/i18n/navigation`. The two root 404s, rendered without a
+locale, get an override with the patterns only.
+
+The rule matches import strings, nothing more. A deep `@/...` path is
+an error even from inside the same slice (use relative imports there).
+Layer direction is not checked: an entity importing `@/widgets/x`, a
+feature importing another feature's barrel, or a relative
+`../../features/x/ui/...` all pass. Hold the table above on review, or
+add a dedicated architecture-lint plugin if you want it enforced.
+
 Pair this with a `@/*` → `src/*` alias in `tsconfig.json` (or
 `jsconfig.json`) so imports stay flat:
 
 ```jsonc
 {
   "compilerOptions": {
-    "baseUrl": ".",
-    "paths": { "@/*": ["src/*"] }
+    "paths": { "@/*": ["./src/*"] }
   }
 }
 ```
+
+No `baseUrl`: `paths` resolve relative to the tsconfig file on their
+own, and TypeScript 6 reports `baseUrl` as deprecated (error TS5101,
+"will stop functioning in TypeScript 7.0").
 
 ## Entity vs Feature vs Widget
 
@@ -182,7 +231,7 @@ entities/post/
 ```
 features/post-create/
   model/        # form state, validation schema
-  api/          # mutation hook (useCreatePost)
+  api/          # Server Action or mutation hook (useCreatePost)
   ui/           # form components, submit button
   index.ts
 ```
@@ -204,19 +253,24 @@ not reach into its internals.
 
 ## State boundaries
 
+> **Not part of this template.** TanStack Query and Zustand aren't
+> installed here: the template fetches in Server Components and keeps
+> client state in local React state (`useState`, `useActionState`).
+> This section is the split to follow *if you add them*.
+
 Three state mechanisms coexist; the boundary keeps each one cheap:
 
 | Mechanism | What lives there | Where |
 |-----------|------------------|-------|
-| **TanStack Query** | Server state — anything fetched, cached, or mutated against the backend. | API consumers; cache lives behind `shared/api/queryClient.ts` |
+| **TanStack Query** | Client-side server state — anything fetched, cached, or mutated against the backend from Client Components. | API consumers; cache lives behind `shared/api/queryClient.ts` |
 | **Zustand stores** | UI / client state — filter selections, derived selectors, modal stacks, transient preferences. | `shared/state/` for cross-feature stores; `entities/<x>/model/` for entity-owned stores |
-| **React Context** | Inversion-of-control / tree-scoped concerns — auth lifecycle, i18n, theme. Anything that needs the *provider* shape, not just shared state. | `shared/auth/AuthProvider.tsx`, `shared/i18n/provider.tsx`, etc. |
+| **React Context** | Inversion-of-control / tree-scoped concerns — auth lifecycle, i18n, theme. Anything that needs the *provider* shape, not just shared state. | An auth provider in `shared/auth/` (if you add auth); i18n here is `NextIntlClientProvider`, rendered via `shared/i18n/ClientMessages.tsx` |
 
 Two rules to keep them separate:
 
 1. **Server data never lives in Zustand.** If it came from the network,
-   it goes through React Query. Mirroring API data in a store creates a
-   duplicate cache that drifts.
+   it's fetched in a Server Component or goes through React Query.
+   Mirroring API data in a store creates a duplicate cache that drifts.
 2. **Zustand stores are flat.** No deeply nested mutations, no thunks.
    If a store grows complex, split it (one slice per logical group).
    Selectors (`useStore(s => s.foo)`) keep re-renders narrow.
@@ -242,18 +296,32 @@ State convention by layer:
 - Layouts compose layout-slot widgets (navigation, status banner)
   directly.
 - `"use client"` lives as close to the leaf as possible — server-render
-  shells where you can. Most widgets will be client components
-  (interactive UIs); pages and layouts can often stay server.
+  shells where you can. Pages, layouts and many widgets can stay
+  server and render a small client leaf (in this template the server
+  `site-header` widget renders the client `LangSwitcher`).
+- Route groups `(app)` / `(auth)` segregate authenticated vs public
+  trees without affecting URLs.
+- Server Actions can live either in `src/app/<route>/actions.ts` (if
+  they're route-local glue) or in the feature that owns the mutation
+  (`features/<x>/api/actions.ts`, like `features/contact` here),
+  re-exported from the slice barrel. Prefer the feature when the same
+  action is needed from more than one route. A Route Handler itself
+  must be a `route.ts` file under `src/app/`; keep it thin and import
+  its logic from the owning feature the same way.
 
 ### Layouts must stay Server Components when possible
 
 The single most common Next.js antipattern with FSD is slapping
 `'use client'` on a layout file because *something* inside it needs
-`usePathname`, `useAuth`, or another hook. That marks the **entire
-subtree** below the layout as a client bundle and disables RSC for
-every route under it.
+`usePathname`, `useAuth`, or another hook. Pages passed in as
+`children` still render on the server — they are not part of the
+layout's module graph. But the layout itself and everything it imports
+or renders directly (navigation, banners and the translations they
+need) move into the client bundle. The layout can no longer be `async`,
+fetch data or call `getTranslations` on the server, and it can't export
+`metadata` / `generateMetadata`.
 
-❌ **Don't do this — whole authenticated tree becomes client:**
+❌ **Don't do this — the layout and all of its chrome become client code:**
 
 ```tsx
 // src/app/(app)/layout.tsx
@@ -299,13 +367,6 @@ import { useAuth } from '@/shared/auth';
 
 Rule of thumb: if a layout needs a hook, the hook belongs in a widget
 the layout renders, not in the layout itself.
-- Route groups `(app)` / `(auth)` segregate authenticated vs public
-  trees without affecting URLs.
-- Server Actions and route handlers can live either in
-  `src/app/<route>/actions.ts` (if they're route-local glue) or in the
-  feature that owns the mutation (`features/<x>/api/actions.ts`),
-  re-exported from the slice barrel. Prefer the feature when the same
-  action is needed from more than one route.
 
 ### Suggested route shape
 
@@ -360,7 +421,8 @@ export { CustomerDashboard } from './ui/CustomerDashboard';
   artificial — then consider whether the "combined" view is itself a
   feature.
 
-- **Auth.** Technically a set of features (login, register, callback),
+- **Auth** (not included in this template — a suggested layout if you
+  add it). Technically a set of features (login, register, callback),
   but the *auth provider* plus its tooling (session lookup, cookie
   forwarding, validation schemas, Server Actions) is app-level
   infrastructure. Resolution: give it its own dedicated segment at the
@@ -388,7 +450,10 @@ export { CustomerDashboard } from './ui/CustomerDashboard';
 
 - **"This widget is just one feature."** Then don't make it a widget —
   render the feature directly from the route. Widgets earn their slice
-  by composing two or more features.
+  by composing two or more features. Layout-slot widgets are the
+  exception: they own a slot of the layout, even if they wrap one
+  feature plus links (`widgets/site-header` here: navigation +
+  `LangSwitcher`).
 
 - **"This feature shares logic with another feature."** Lift the
   shared logic down — into an entity (if it's domain-shaped) or
@@ -429,7 +494,20 @@ export { CustomerDashboard } from './ui/CustomerDashboard';
 - **Server components vs client components.** Both can live in the
   same slice. Keep `"use client"` on the leaf that needs interactivity;
   let server components render the shell. The slice barrel can export
-  both — consumers don't need to know which is which.
+  both; a Server Component consumer can render either. A Client
+  Component consumer can only render the client exports — an `async`
+  Server Component from the same barrel (e.g. one calling
+  `getTranslations`) has to be rendered by a Server Component above it.
+  Rendered from the client, it throws; on a prerendered page the build
+  stops with
+  `` `getTranslations` is not supported in Client Components ``.
+  Importing such a barrel from a Client Component still pulls every
+  module it re-exports into the client module graph. Unused server
+  exports are tree-shaken out of the bundle, but one with
+  `import 'server-only'` fails the build with
+  `'server-only' cannot be imported from a Client Component module`.
+  Keep `server-only` modules out of barrels that Client Components
+  import.
 
 ## Maintenance
 
@@ -438,8 +516,9 @@ export { CustomerDashboard } from './ui/CustomerDashboard';
 - Update the import-rules ESLint config when adding a new layer-style
   folder (e.g. a new top-level convention). Boundary drift is the
   fastest way to lose FSD's benefits.
-- Document the slice inventory separately (e.g. `docs/TARGET_LAYOUT.md`)
-  so this guide stays a stable reference and the inventory can churn
+- Document the slice inventory separately (e.g. a `docs/TARGET_LAYOUT.md`
+  in your project; here it's the section at the top of this file) so
+  this guide stays a stable reference and the inventory can churn
   freely.
 - When a slice has only one consumer and that consumer is the only
   route that will ever use it, consider whether it should be a slice
@@ -452,8 +531,9 @@ export { CustomerDashboard } from './ui/CustomerDashboard';
   slice's `index` barrel.
 - Entity = noun, Feature = verb, Widget = layout-bound composition of
   features.
-- Server state → React Query. Client state → Zustand. Tree-scoped
-  concerns → Context.
+- Server state → Server Components (React Query for client-side
+  fetching). Client state → local state, Zustand if you add it.
+  Tree-scoped concerns → Context.
 - Next.js App Router *is* the `app/` layer. Route files stay thin.
 - When in doubt: start as a feature, lift down to entity/shared if
   reused, promote to widget when composing multiple features.

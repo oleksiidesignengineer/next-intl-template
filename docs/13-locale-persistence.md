@@ -1,223 +1,165 @@
-# Сохранение выбора локали (cookie + Route Handler)
+# Запоминание выбранной локали: cookie `NEXT_LOCALE`
 
-## Проблема
+Коротко:
 
-`localeDetection: true` в `routing.ts` работает **только при первом заходе**. Proxy (`src/proxy.ts`) смотрит на заголовок `Accept-Language` и редиректит на подходящую локаль. Но если пользователь вручную выбрал русский, закрыл вкладку и открыл сайт снова — браузер снова шлёт `Accept-Language: en-US`, и middleware опять редиректит на английский. Выбор потерян.
+- При префиксной маршрутизации язык задаёт URL. Cookie влияет только на URL без префикса: при `as-needed` это `/`, `/about`, `/blog` и т.д.
+- Cookie в шаблоне сессионная, как по умолчанию в next-intl. Долгий `maxAge` включается явно (opt-in).
+- Писать cookie в коде приложения не нужно: её ставят proxy (на document-запросах) и навигация next-intl (на клиенте).
+- Исключение — смена языка на сервере, например после логина. Там нужны Server Action, `cookies().set()` и `redirect({ href, locale })`.
+- Route Handler `/api/locale` удалён.
+- Если перед приложением стоит CDN, proxy должен выполняться до кеша.
 
-## Решение: cookie `NEXT_LOCALE`
+Все ответы proxy ниже сняты curl с production-сборки шаблона.
 
-Proxy next-intl читает cookie `NEXT_LOCALE` **перед** `Accept-Language`. Если cookie есть — уважает её значение, редиректит не нужен.
+## Где cookie влияет на язык, а где нет
 
-**Хорошая новость**: cookie выставляется автоматически самим proxy, когда пользователь переходит между локалями через `<Link>` или `router.replace`. В шаблоне это делает `LangSwitcher`:
+Proxy выбирает локаль в таком порядке: префикс в URL → cookie → `Accept-Language` → `defaultLocale`. Cookie и `Accept-Language` участвуют, только пока `localeDetection: true`.
 
-```tsx
-// src/features/locale-switch/ui/LangSwitcher.tsx
-router.replace({ pathname, params, query }, { locale: next })
+| Запрос | Ответ |
+|---|---|
+| `/` + `Accept-Language: ru` | 307 → `/ru` |
+| `/` + `Cookie: NEXT_LOCALE=uk` | 307 → `/uk` |
+| `/about` + `Cookie: NEXT_LOCALE=ru` | 307 → `/ru/o-nas` |
+| `/ru` + `Cookie: NEXT_LOCALE=uk` (document) | 200, страница на русском, `Set-Cookie: NEXT_LOCALE=ru` |
+| `/en/about` + `Cookie: NEXT_LOCALE=ru` (document) | 307 → `/about`, `Set-Cookie: NEXT_LOCALE=en` |
+
+Отсюда главное: **язык меняется переходом на URL другой локали, а не записью cookie.** Страницы `/ru/*` пререндерены на русском, и на первом же document-запросе proxy вернёт cookie к значению из префикса. Схема «записать cookie и вызвать `router.refresh()`» на префиксных URL не работает. Она осмысленна только при `localePrefix: 'never'` ([08-pathnames.md](./08-pathnames.md)).
+
+## Почему cookie сессионная
+
+В [src/shared/i18n/routing.ts](../src/shared/i18n/routing.ts) `localeCookie` не задан, поэтому действуют дефолты next-intl: имя `NEXT_LOCALE`, `SameSite=Lax`, без `Max-Age`. Документация next-intl объясняет: «To be compliant out of the box, `next-intl` does not set the `max-age` value of the cookie, making it a session cookie that expires when a browser is closed».
+
+Это важно потому, что proxy ставит cookie и тем, кто ничего не выбирал. В `syncCookie` два условия: cookie есть, но не совпадает с локалью запроса, или cookie нет, а локаль запроса не совпадает с лучшим совпадением по `Accept-Language`. Второе условие срабатывает и у тех, кто язык не выбирал. Проверено:
+
+- открыл присланную ссылку `/ru/o-nas` из английского браузера → `Set-Cookie: NEXT_LOCALE=ru`;
+- запрос вообще без `Accept-Language` (боты, curl) → `/` отдаёт `Set-Cookie: NEXT_LOCALE=en`.
+
+Годовая cookie в таких случаях хранила бы предпочтение, которое пользователь не выражал. По ePrivacy/GDPR это, скорее всего, вопрос согласия (оценка, не юридическая консультация). Требования различаются по регионам, и next-intl прямо советует проверять их самостоятельно.
+
+**Цена сессионной cookie при `as-needed`.** После перезапуска браузера выбор дефолтной локали забывается: `/about` с `Accept-Language: ru` снова уводит на `/ru/o-nas`. Выбор остальных локалей держится в самом URL (закладки, история), поэтому на них это почти не влияет.
+
+**Как включить долгую cookie** (opt-in, комментарий об этом есть в `routing.ts`):
+
+```ts
+// Example
+localeCookie: { maxAge: 60 * 60 * 24 * 365 },
 ```
 
-Proxy перехватывает навигацию, видит смену локали, выставляет `Set-Cookie: NEXT_LOCALE=ru` в ответе. **Никакого дополнительного кода не нужно** — следующий визит уважает выбор.
+С ней, вероятно, понадобится cookie-баннер или согласие. Документация next-intl отдельно советует увеличивать `maxAge` при `localePrefix: 'never'`: там cookie — единственное место, где хранится выбор. При `as-needed` пользы от неё меньше, а юридическая цена та же.
 
-## Когда нужен Route Handler `/api/locale`
+**`localeCookie: false`** ставь только вместе с `localeDetection: false`. Иначе при `as-needed` пользователь с «чужим» `Accept-Language` не сможет остаться на дефолтной локали ([08-pathnames.md](./08-pathnames.md#прочие-опции-кратко)).
 
-Есть сценарии, где UI-навигации нет, но cookie нужно выставить:
+## Кто и когда ставит cookie
 
-**После login**: пользователь авторизовался, в его профиле в БД `preferredLocale: 'ru'`. Нужно синхронизировать cookie с профилем:
+**1. Proxy — только на document-запросах** (с next-intl 4.13.3). Prefetch, RSC-запросы при soft-навигации и ревалидация cookie не трогают. Проверено: тот же `/ru/o-nas` с `Sec-Fetch-Dest: empty` отвечает без `Set-Cookie`. Запрос вообще без `Sec-Fetch-Dest` (curl, боты, старые клиенты) proxy считает document-запросом (`if (secFetchDest != null && secFetchDest !== 'document') return`). Поэтому голый curl на `/` в замере выше получил `Set-Cookie`. Комментарий в исходнике next-intl (`middleware/syncCookie.js`):
+
+> Only document requests indicate that the user is actually navigating to a page—in contrast to background requests of the client-side router like prefetches and cache revalidations. […] Locale switches via a soft navigation update the cookie on the client side.
+
+Поменял в `routing.localeCookie` имя или атрибуты — proxy возьмёт их оттуда же.
+
+**2. Клиентская навигация next-intl** пишет `document.cookie` с атрибутами из `routing.localeCookie`. Это делают:
+- `useRouter().push/replace/prefetch` с опцией `locale`, отличной от текущей, — перед навигацией;
+- `<Link locale>` с другой локалью — по клику.
+
+`path` равен `basePath` или `/`. На клиенте `basePath` next-intl берёт из env, который задаёт `createNextIntlPlugin`, поэтому плагин в [next.config.ts](../next.config.ts) нужен и для этого. LangSwitcher работает через этот механизм, а e2e проверяет, что после переключения cookie равна `ru` ([tests/e2e/i18n.spec.ts](../tests/e2e/i18n.spec.ts)).
+
+**3. Не ставят cookie:**
+- `next/link` и `useRouter` из `next/navigation`;
+- `fetch`;
+- серверный `redirect` из `@/shared/i18n/navigation`: в его серверной сборке кода для cookie нет.
+
+Cookie остаётся со старым языком, и следующий заход на `/` уведёт на него. Поэтому внутренние переходы идут только через API из [06-navigation.md](./06-navigation.md).
+
+## После логина: язык из профиля
+
+Типичная задача: в профиле хранится `preferredLocale`, и после входа пользователь должен попасть на свой язык. Пример (в шаблоне такого action нет):
+
 ```ts
-await fetch('/api/locale', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ locale: user.preferredLocale }),
-})
-router.refresh()
-```
+// Example
+'use server'
 
-**Settings-страница**: пользователь меняет язык в настройках профиля, не переходя на новый URL. Route Handler + `router.refresh()` показывает новый язык на той же странице без перезагрузки.
-
-**Мобильное приложение в WebView**: устанавливает локаль системно через endpoint, не через UI-навигацию.
-
-**Внешний клиент**: SDK, Postman, тестовый скрипт — всё, что шлёт HTTP, но не ходит через React-навигацию.
-
-## Разбор `src/app/api/locale/route.ts`
-
-> **Контракт endpoint:** `/api/locale` только **ставит cookie** `NEXT_LOCALE` и НЕ перерисовывает текущую страницу. Так как страницы статически пререндерятся по локали, после успешного ответа клиент должен вызвать `router.refresh()` (или сделать полную навигацию), чтобы UI переключился. Ответ — `{ ok: true, locale }`. Подробнее — раздел «Revalidation после изменения cookie» ниже.
-
-```ts
 import { hasLocale } from 'next-intl'
 import { cookies } from 'next/headers'
-import { NextResponse } from 'next/server'
-import { LOCALE_COOKIE_MAX_AGE, LOCALE_COOKIE_NAME, routing } from '@/shared/i18n/routing'
 
-export async function POST(request: Request) {
-  // 0. Same-origin guard — отклоняем cross-origin POST.
-  //    Origin парсим защищённо: битый Origin → 403, а не 500 из new URL().
-  const origin = request.headers.get('origin')
-  const host = request.headers.get('host')
-  let originHost: string | null = null
-  try {
-    originHost = origin ? new URL(origin).host : null
-  } catch {
-    originHost = null
-  }
-  if (!originHost || !host || originHost !== host) {
-    return NextResponse.json({ error: 'Cross-origin request rejected' }, { status: 403 })
-  }
-
-  // 1. Чтение JSON-body с защитой от malformed
-  let payload: unknown
-  try {
-    payload = await request.json()
-  } catch {
-    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
-  }
-
-  // 2. Валидация locale через hasLocale (сужает unknown до Locale)
-  const locale = (payload as { locale?: unknown })?.locale
-
-  if (!hasLocale(routing.locales, locale)) {
-    return NextResponse.json(
-      { error: 'Invalid locale', allowed: routing.locales },
-      { status: 400 }
-    )
-  }
-
-  // 3. Выставление cookie
-  const store = await cookies()
-  store.set(LOCALE_COOKIE_NAME, locale, {
-    maxAge: LOCALE_COOKIE_MAX_AGE, // 1 год, константа из routing.ts
-    sameSite: 'lax',
-    path: '/',
-    secure: process.env.NODE_ENV === 'production',
-  })
-
-  return NextResponse.json({ ok: true, locale })
-}
-```
-
-**Никогда не доверяй input снаружи** — `hasLocale(routing.locales, locale)` отсекает произвольные значения и одновременно сужает тип `locale` до `Locale`.
-
-### Защита от CSRF
-
-Route Handler меняет состояние сессии (cookie). Без проверки origin злонамеренный сайт может через `fetch('https://victim.com/api/locale', { method: 'POST', body: ... })` переключить локаль у любого посетителя.
-
-Импакт здесь невелик (просто язык не тот), но для **любого** state-changing endpoint это must-have. В шаблоне реализована минимальная same-origin проверка:
-
-```ts
-const origin = request.headers.get('origin')
-const host = request.headers.get('host')
-let originHost: string | null = null
-try {
-  originHost = origin ? new URL(origin).host : null
-} catch {
-  originHost = null
-}
-if (!originHost || !host || originHost !== host) {
-  return NextResponse.json({ error: 'Cross-origin request rejected' }, { status: 403 })
-}
-```
-
-Отсутствие `Origin` header трактуется как подозрительный запрос — современные браузеры всегда его шлют на POST. Для production-проектов добавь сверху CSRF-токен (например, в form action) или используй `next-safe-action` библиотеку.
-
-### Связь имени cookie между routing.ts и Route Handler
-
-next-intl proxy читает cookie с именем, заданным в `routing.localeCookie.name`. Route Handler должен ставить cookie с тем же именем — иначе proxy её не подхватит, и весь endpoint работает молча мимо.
-
-Шаблон экспортирует из `routing.ts` константы `LOCALE_COOKIE_NAME` и `LOCALE_COOKIE_MAX_AGE` и импортирует их везде, где ставится cookie:
-
-```ts
-// routing.ts
-export const LOCALE_COOKIE_NAME = 'NEXT_LOCALE'
-export const LOCALE_COOKIE_MAX_AGE = 60 * 60 * 24 * 365 // 1 год
-
-// api/locale/route.ts
-import { LOCALE_COOKIE_MAX_AGE, LOCALE_COOKIE_NAME } from '@/shared/i18n/routing'
-store.set(LOCALE_COOKIE_NAME, locale, { maxAge: LOCALE_COOKIE_MAX_AGE, ... })
-```
-
-Меняешь имя или срок — все места обновятся согласованно (single source of truth).
-
-### Почему `sameSite: 'lax'`
-
-`lax` разрешает cookie при top-level навигации (переход по ссылке), но блокирует при cross-site sub-запросах (iframe, `<img>`). Это баланс между безопасностью и удобством: cookie не пропадёт при обычном редиректе со стороннего сайта.
-
-### Почему `path: '/'`
-
-Cookie должна быть видна на всех страницах сайта. Без явного `path: '/'` cookie привяжется к `/api/locale` и middleware её не увидит.
-
-### Почему `secure: production-only`
-
-На `http://localhost` dev-сервер не использует HTTPS — cookie без флага `secure` работает нормально. На production без HTTPS `secure`-cookie вообще не должна устанавливаться (да и сайт без HTTPS сегодня не должен существовать).
-
-## Пример вызова из клиента
-
-```ts
-// Выставить cookie и применить
-await fetch('/api/locale', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ locale: 'ru' }),
-})
-
-// Применить без перехода на другой URL:
-router.refresh()
-
-// Или перейти на новый URL с нужной локалью:
-router.push('/', { locale: 'ru' })
-```
-
-`router.refresh()` запрашивает текущую страницу заново — Server Components рендерятся с новой cookie, которую уже видит middleware.
-
-### Revalidation после изменения cookie
-
-После `POST /api/locale` cookie выставлена, но **текущая страница уже отрендерена** со старой локалью. Чтобы новая локаль применилась без полной перезагрузки, клиент должен вызвать `router.refresh()` (или сделать полную навигацию).
-
-Пример клиентского хелпера:
-
-```tsx
-'use client'
-import { useRouter } from '@/shared/i18n/navigation'
-
-async function setLocale(locale: string) {
-  const response = await fetch('/api/locale', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ locale }),
-  })
-  if (!response.ok) throw new Error('Failed to set locale')
-  router.refresh()   // перерендерить серверные сегменты с новой cookie
-}
-```
-
-Если страница использует `revalidatePath` или `revalidateTag` кэш — инвалидируй их в самом Route Handler после `cookies.set`, чтобы новые данные пришли с правильной локалью.
-
-## Альтернатива: прямо из Server Action
-
-Если смена локали происходит после login (Server Action), вызывать собственный HTTP-endpoint не нужно — `cookies()` доступен напрямую:
-
-```ts
-'use server'
-import { cookies } from 'next/headers'
 import { redirect } from '@/shared/i18n/navigation'
-import { LOCALE_COOKIE_MAX_AGE, LOCALE_COOKIE_NAME } from '@/shared/i18n/routing'
+import { routing } from '@/shared/i18n/routing'
 
-export async function loginAction(formData: FormData) {
-  const user = await authenticate(formData)
+export async function signIn(formData: FormData) {
+  const user = await authenticate(formData) // your auth
+  const locale = hasLocale(routing.locales, user.preferredLocale)
+    ? user.preferredLocale
+    : routing.defaultLocale
 
-  // Выставляем locale из профиля пользователя
+  // Same name and attributes as next-intl's own cookie (defaults: NEXT_LOCALE,
+  // SameSite=Lax, no Max-Age). Mirror any routing.localeCookie overrides here.
   const store = await cookies()
-  store.set(LOCALE_COOKIE_NAME, user.preferredLocale, {
-    maxAge: LOCALE_COOKIE_MAX_AGE,
-    sameSite: 'lax',
-    path: '/',
-    secure: process.env.NODE_ENV === 'production',
-  })
+  store.set('NEXT_LOCALE', locale, { sameSite: 'lax' })
 
-  // redirect берём из @/shared/i18n/navigation (правило AGENTS.md), локаль — явно
-  redirect({ href: '/', locale: user.preferredLocale })
+  // '/' is not in `pathnames`, so the typed href needs a cast (docs/08)
+  redirect({ href: '/' as never, locale })
 }
 ```
 
-**Когда что**:
-- **Server Action** — когда логика уже на сервере (login, settings save). Нет лишнего HTTP-запроса.
-- **Route Handler** — когда нужен HTTP endpoint для внешних клиентов (мобильное приложение, WebView, SDK).
+**Зачем cookie руками.** При включённом JS `redirect` из Server Action не порождает document-запрос. Next сам запрашивает целевую страницу на сервере RSC-запросом с заголовками браузера (`Sec-Fetch-Dest: empty`) и отдаёт её в ответе action. Proxy считает такой запрос фоновым и cookie не синхронизирует, а серверный `redirect` next-intl её не трогает. Без `store.set` пользователь со старой cookie `ru`, которому нужен `en`, снова увидит русскую страницу. Проверено настоящим action (сниппет выше) в Chromium, Firefox и WebKit на production-сборке: старт с `/ru/...` с cookie `ru`, цель — `en`.
 
-Подробнее про Server Actions с переводами — в [12-server-actions.md](./12-server-actions.md).
+| Вариант action | JS включён | Без JS |
+|---|---|---|
+| как в примере, со `store.set` | `/`, страница английская, cookie `en` | то же |
+| без `store.set` | адрес `/`, а страница русская (`lang="ru"`); после перезагрузки — `/ru` | `/ru` |
+| без `store.set`, `forcePrefix: true` | адрес `/en`, а страница русская | `/`, английская |
+
+Механика видна по RSC-запросам, которые сервер делает за action: `/` + `Cookie: NEXT_LOCALE=ru` → 307 `/ru`, а `/en` → 307 `/` без `Set-Cookie`. Без JS ответ action — 303, браузер идёт по нему document-запросом, и на `/en` proxy сам переписывает cookie. Поэтому `forcePrefix` выручает только без JS, а с JS — нет. Вариант со `store.set` работает в обоих режимах. С JS Next подставляет cookie, поставленные action, во внутренний запрос к целевой странице (в `next/dist/server/app-render/action-handler.js`: «responseCookies always take precedence»). Без JS браузер сохраняет `Set-Cookie` из 303 до перехода.
+
+**Атрибуты должны совпадать с `routing.localeCookie`.**
+- Если разойдутся `path` или `domain`, получатся две разные cookie с одним именем. `cookies().set()` по умолчанию ставит `Path=/` (документация Next: «The only option with a default value is `path`»). При `basePath` передай `path: basePath`, как делает next-intl.
+- Если разойдутся `maxAge` или `secure`, cookie останется одна, но её срок жизни и флаги будут зависеть от того, кто записал её последним: action или proxy/клиент. Включил их в `routing.ts` — добавь и сюда. А лучше вынеси объект с атрибутами в константу рядом с `routing` и используй его в обоих местах.
+
+Ещё три детали:
+- **Локаль в action передаётся явно**, root params в Server Actions недоступны ([12-server-actions.md](./12-server-actions.md)). `preferredLocale` из БД всё равно валидируй через `hasLocale`.
+- **`redirect` вызывай вне `try/catch`**: он бросает исключение.
+- **Смена языка в настройках профиля** делается тем же приёмом: сохранить в БД, поставить cookie, сделать `redirect` на ту же страницу в новой локали.
+
+## Почему удалён `/api/locale`
+
+В шаблоне был Route Handler `POST /api/locale`, который ставил cookie. Удалён по четырём причинам:
+
+1. **Избыточен.** При префиксной маршрутизации next-intl сам ставит cookie на клиенте и в proxy.
+2. **Обещанный сценарий не работал.** «POST cookie + `router.refresh()` показывает новый язык» ломался на префиксных URL: `/ru` с `Cookie: NEXT_LOCALE=uk` отдаёт русскую страницу и переписывает cookie обратно.
+3. **Самописная проверка Origin была неполной.** Она сравнивала `Origin` только с `Host`, поэтому за reverse proxy, который меняет `Host`, давала ложный 403. В Server Actions проверка встроена (документация Next, `serverActions`): «Next.js compares the host in a request's `Origin` header against the app's own host, taken from `x-forwarded-host` or `host`, and rejects the action when the two differ».
+4. **Атрибуты cookie расходились с proxy.** Handler в production ставил `Secure`, а proxy нет. Общие константы покрывали только имя и `maxAge`, а `secure` handler добавлял сам.
+
+HTTP-эндпоинт имеет смысл, только если локаль меняет клиент вне React-навигации и без префиксов в URL: нативное приложение или WebView при `localePrefix: 'never'`. Тогда нужно:
+- валидировать локаль через `hasLocale`;
+- проверять `Origin` против `x-forwarded-host ?? host` (или использовать токен);
+- задать политику для запросов без `Origin`;
+- ставить атрибуты cookie ровно как в `routing.localeCookie`.
+
+## CDN и кеширование
+
+Ответ на URL без префикса зависит от заголовков, которых нет в ключе кеша. Вот что отдаёт production-сборка на `/` без cookie и `Accept-Language` (выборка заголовков):
+
+```
+HTTP/1.1 200 OK
+set-cookie: NEXT_LOCALE=en; Path=/; SameSite=lax
+Vary: rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch, Accept-Encoding
+Cache-Control: s-maxage=31536000
+```
+
+Тот же `/` с `Accept-Language: ru` отдаёт 307 → `/ru`, с `Cookie: NEXT_LOCALE=uk` — 307 → `/uk`. У редиректов proxy нет `Cache-Control`. В `Vary` нет ни `Cookie`, ни `Accept-Language`.
+
+**Правильная схема — proxy до кеша.** Документация Next.js ([CDN Caching](https://nextjs.org/docs/app/guides/cdn-caching)): «`proxy.js` should run before the CDN cache so it remains the source of truth for auth, redirects, and rewrites. If your deployment places `proxy.js` behind the CDN, configure the cache layer to bypass caching for routes that depend on `proxy.js` decisions». Vercel работает именно так: Routing Middleware «runs globally before the cache» ([документация Vercel](https://vercel.com/docs/routing-middleware)). У `next start` без внешнего CDN кеш Next тоже стоит после proxy.
+
+**Что ломается, если CDN стоит перед приложением и кеширует по URL** (Cloudflare, CloudFront, nginx `proxy_cache` и т.п.):
+
+- Закешированный 200 для `/` (`s-maxage` на год) раздаётся всем. Detection по cookie и `Accept-Language` на URL без префикса перестаёт работать: пользователь, выбравший `uk`, получает английскую главную.
+- Если правило «cache everything» закеширует 307 от proxy, всех уведёт на одну локаль. По HTTP-спецификации (RFC 9110, §15.1) 307 без `Cache-Control` эвристически не кешируется, но агрессивные правила CDN это обходят.
+- Ответы с `Set-Cookie` разные CDN обрабатывают по-разному: одни не кешируют, другие вырезают заголовок или кешируют вместе с ним. Проверь это в документации своего CDN.
+
+**Варианты, если proxy за CDN:**
+
+1. **Не кешировать в общем кеше URL без префикса** (при `as-needed` это все страницы дефолтной локали) или включить в ключ кеша значение `NEXT_LOCALE` и нормализованный язык из `Accept-Language`. Ответы proxy с 307 не кешировать.
+2. **Сделать ответы однозначными по URL.** Вариант первый — `localePrefix: 'always'`: страницы всегда с префиксом, а без префикса идут только 307. Вариант второй — `localeDetection: false` вместе с `localeCookie: false`: URL без префикса всегда отдаёт дефолтную локаль. Плата — префикс у основного рынка или потеря автоопределения языка. Компромиссы описаны в [08-pathnames.md](./08-pathnames.md#localeprefix-as-needed-always-never).
+
+Префиксные страницы тоже иногда несут `Set-Cookie`: `/ru/o-nas` из английского браузера отдаёт `Set-Cookie: NEXT_LOCALE=ru` вместе с `s-maxage`. Повторная раздача этой cookie согласована с URL, поэтому сама по себе безвредна, но правило для `Set-Cookie` на CDN всё равно должно быть осознанным.
+
+Чек-лист перед продакшном — в [15-production-checklist.md](./15-production-checklist.md), тесты — в [14-testing.md](./14-testing.md).

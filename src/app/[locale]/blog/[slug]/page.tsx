@@ -1,45 +1,39 @@
-import { getTranslations, setRequestLocale } from 'next-intl/server'
-import type { Metadata } from 'next'
 import { notFound } from 'next/navigation'
+import { getLocale, getTranslations } from 'next-intl/server'
 
 import { getAllPosts, getPostBySlug } from '@/entities/post'
-import { type Locale, routing } from '@/shared/i18n/routing'
-import { buildLanguageAlternates } from '@/shared/seo/alternates'
+import { buildPageMetadata } from '@/shared/seo/metadata'
 import Link from '@/shared/ui/Link'
 
-type Props = {
-  params: Promise<{ locale: string; slug: string }>
-}
+type Props = PageProps<'/[locale]/blog/[slug]'>
 
-// Pre-render every (locale × slug) at build time.
+// Every (locale × slug) pair is pre-rendered: the locale values come from
+// [locale]/layout.tsx's generateStaticParams, the slugs from here.
 export function generateStaticParams() {
-  return routing.locales.flatMap((locale) =>
-    getAllPosts().map((post) => ({ locale, slug: post.slug }))
-  )
+  return getAllPosts().map((post) => ({ slug: post.slug }))
 }
 
-export async function generateMetadata({ params }: Props): Promise<Metadata> {
-  const { locale, slug } = await params
+export async function generateMetadata({ params }: Props) {
+  const { slug } = await params
   const post = getPostBySlug(slug)
   if (!post) return {}
 
-  const translation = post.translations[locale as Locale]
-  return {
+  const translation = post.translations[await getLocale()]
+  return buildPageMetadata({
+    href: `/blog/${slug}`,
     title: translation.title,
     description: translation.excerpt,
-    alternates: buildLanguageAlternates(locale, `/blog/${slug}`),
-  }
+  })
 }
 
 export default async function BlogPostPage({ params }: Props) {
-  const { locale, slug } = await params
-  setRequestLocale(locale as Locale)
-
+  const { slug } = await params
   const post = getPostBySlug(slug)
   if (!post) notFound()
 
+  const locale = await getLocale()
   const t = await getTranslations('blog')
-  const translation = post.translations[locale as Locale]
+  const translation = post.translations[locale]
 
   return (
     <article className="max-w-2xl space-y-6">
@@ -59,7 +53,11 @@ export default async function BlogPostPage({ params }: Props) {
 
       <p>
         <Link href="/blog" className="text-blue-600 hover:underline">
-          ← {t('title')}
+          {/* Decorative arrow: mirrored in RTL, kept out of the link's name. */}
+          <span aria-hidden className="inline-block rtl:-scale-x-100">
+            ←
+          </span>{' '}
+          {t('title')}
         </Link>
       </p>
     </article>

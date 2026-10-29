@@ -1,4 +1,4 @@
-import { type Locale } from '@/shared/i18n/routing'
+import type { Locale } from 'next-intl'
 
 export type BlogPostTranslation = {
   title: string

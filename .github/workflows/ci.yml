@@ -1,0 +1,53 @@
+# Full check of the template: translations, lint, types, production build and
+# end-to-end tests against that build (routing, SEO, client messages, forms).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Least privilege: the job only reads the repository. `npm ci`, the build and
+# the tests execute third-party code — it shouldn't get a writable token.
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    env:
+      # Canonical origin baked into static pages (canonical, hreflang, sitemap).
+      # The e2e suite reads the same variable to know what to expect.
+      SITE_URL: https://example.com
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+
+      - name: Translations (keys, ICU syntax, arguments, plural categories)
+        run: npm run check:translations
+      - name: Lint
+        run: npm run lint
+      # `next typegen` first: route types (PageProps/LayoutProps), next/root-params
+      # and the strict message declaration (en.d.json.ts) are generated files.
+      - name: Type-check
+        run: npm run typecheck
+      - name: Build
+        run: npm run build
+
+      - name: Install Playwright browsers (Chromium, Firefox, WebKit)
+        run: npx playwright install --with-deps
+      - name: Unit and end-to-end tests
+        run: npm test
+      - uses: actions/upload-artifact@v7
+        # Also after retried (flaky) runs, not only on failure.
+        if: ${{ !cancelled() }}
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
